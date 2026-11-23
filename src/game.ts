@@ -94,6 +94,7 @@ export class Game {
   private countdown = 0;
   private speed = 1;
   private paused = false;
+  private screenMode: 'standard' | 'wide' = 'standard';
   private buildType: TowerType | null = null;
   private selected: Tower | null = null;
   private hoverTile: [number, number] | null = null;
@@ -107,6 +108,8 @@ export class Game {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.screenMode = this.restoreScreenMode();
+    this.setScreenMode(this.screenMode, false);
     this.view = new Renderer3D(canvas);
     this.buildTowerList();
     this.buildEnemyCodex();
@@ -316,6 +319,29 @@ export class Game {
     });
   }
 
+  private restoreScreenMode(): 'standard' | 'wide' {
+    try {
+      return localStorage.getItem('tfgame:screenMode') === 'wide' ? 'wide' : 'standard';
+    } catch {
+      return 'standard';
+    }
+  }
+
+  private setScreenMode(mode: 'standard' | 'wide', persist = true) {
+    this.screenMode = mode;
+    document.documentElement.dataset.screen = mode;
+    const standardBtn = $('btn-screen-standard');
+    const wideBtn = $('btn-screen-wide');
+    standardBtn.classList.toggle('active', mode === 'standard');
+    wideBtn.classList.toggle('active', mode === 'wide');
+    standardBtn.setAttribute('aria-pressed', String(mode === 'standard'));
+    wideBtn.setAttribute('aria-pressed', String(mode === 'wide'));
+    if (persist) {
+      try { localStorage.setItem('tfgame:screenMode', mode); } catch { /* 忽略隐私模式限制 */ }
+    }
+    if (this.view) requestAnimationFrame(() => this.view.resize());
+  }
+
   private bindEvents() {
     this.canvas.addEventListener('mousemove', (e) => {
       this.hoverTile = this.view.getTileFromEvent(e);
@@ -349,6 +375,8 @@ export class Game {
       $('btn-pause').textContent = this.paused ? '继续' : '暂停';
       $('btn-pause').classList.toggle('active', this.paused);
     });
+    $('btn-screen-standard').addEventListener('click', () => this.setScreenMode('standard'));
+    $('btn-screen-wide').addEventListener('click', () => this.setScreenMode('wide'));
     $('btn-rot-left').addEventListener('click', () => this.view.rotateBy(-Math.PI / 8));
     $('btn-rot-right').addEventListener('click', () => this.view.rotateBy(Math.PI / 8));
     $('btn-cam-reset').addEventListener('click', () => this.view.resetCamera());
@@ -381,6 +409,7 @@ export class Game {
       if (e.key === 'Escape') { this.buildType = null; this.selected = null; this.syncTowerList(); this.syncInfo(); }
       if (e.key === 'q' || e.key === 'Q') this.view.rotateBy(-Math.PI / 8);
       if (e.key === 'e' || e.key === 'E') this.view.rotateBy(Math.PI / 8);
+      if (e.key === 'f' || e.key === 'F') this.setScreenMode(this.screenMode === 'standard' ? 'wide' : 'standard');
       if (e.code === 'Space') { e.preventDefault(); if (this.status !== 'wave') this.startWave(true); }
     });
   }
@@ -517,14 +546,79 @@ export class Game {
       path = makeAirPath();
     }
     if (!path) return;
-    const hp = cfg.hp * group.hpScale * difficultyScale(this.level.id);
+    // 编队规模提升后，单个普通单位适当下调血量以维持整体难度；Boss 保持强度。
+    const swarmHp = group.boss ? 1 : 0.58;
+    const hp = cfg.hp * group.hpScale * difficultyScale(this.level.id) * swarmHp;
     this.enemies.push({
       id: ++this.id, type: group.type, kind: cfg.kind, x: path.points[0].x, y: path.points[0].y,
       hp, maxHp: hp, armor: cfg.armor, speed: cfg.speed,
-      bounty: Math.round(cfg.bounty * (0.55 + 0.22 * Math.sqrt(group.hpScale * difficultyScale(this.level.id) - 1))),
-      damage: cfg.damage, size: cfg.size * (group.boss ? 1.5 : 1), color: cfg.color, boss: !!group.boss,
+      bounty: Math.round(cfg.bounty * (0.55 + 0.22 * Math.sqrt(group.hpScale * difficultyScale(this.level.id) - 1)) * swarmHp),
+      damage: cfg.damage, size: cfg.size * (group.boss ? 1.5 : 1),
+      footprint: (cfg.footprint ?? cfg.size * 2) * (group.boss ? 1.3 : 1),
+      color: cfg.color, boss: !!group.boss,
       path, index: 0, traveled: 0, angle: 0, dead: false,
     });
+  }
+
+  private placeOnPath(e: Enemy, traveled: number) {
+    const pts = e.path.points;
+    if (pts.length < 2) {
+      if (pts[0]) { e.x = pts[0].x; e.y = pts[0].y; }
+      e.index = 0;
+      e.traveled = traveled;
+      return;
+    }
+    if (traveled < 0) {
+      const dx = pts[1].x - pts[0].x;
+      const dy = pts[1].y - pts[0].y;
+      const len = Math.hypot(dx, dy) || 1;
+      e.x = pts[0].x + (dx / len) * traveled;
+      e.y = pts[0].y + (dy / len) * traveled;
+      e.index = 0;
+      e.traveled = traveled;
+      return;
+    }
+    let remain = traveled;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      if (remain <= seg) {
+        const r = seg > 0 ? remain / seg : 0;
+        e.x = a.x + (b.x - a.x) * r;
+        e.y = a.y + (b.y - a.y) * r;
+        e.index = i;
+        e.traveled = traveled;
+        return;
+      }
+      remain -= seg;
+    }
+    const last = pts[pts.length - 1];
+    e.x = last.x;
+    e.y = last.y;
+    e.index = pts.length - 2;
+    e.traveled = traveled;
+  }
+
+  private enforceSpacing() {
+    const lanes = new Map<PathData, Enemy[]>();
+    for (const e of this.enemies) {
+      if (e.dead || e.kind === 'air') continue;
+      let list = lanes.get(e.path);
+      if (!list) { list = []; lanes.set(e.path, list); }
+      list.push(e);
+    }
+    for (const list of lanes.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => b.traveled - a.traveled);
+      for (let i = 1; i < list.length; i++) {
+        const leader = list[i - 1];
+        const follower = list[i];
+        const gap = (leader.footprint + follower.footprint) * 0.5 + 8;
+        const limit = leader.traveled - gap;
+        if (follower.traveled > limit) this.placeOnPath(follower, limit);
+      }
+    }
   }
 
   private findTarget(t: Tower): Enemy | null {
@@ -783,6 +877,8 @@ export class Game {
           this.dust(e.x, e.y, '#bfe6f2', 2);
         }
       }
+
+      this.enforceSpacing();
 
       for (const t of this.towers) {
         t.cooldown -= sdt;

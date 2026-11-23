@@ -17,6 +17,7 @@ export interface EnemyConfig {
   color: string;
   kind: PathKind;
   size: number;
+  footprint?: number;
 }
 
 export interface TowerConfig {

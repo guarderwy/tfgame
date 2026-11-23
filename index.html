@@ -25,6 +25,10 @@
 
         <div class="top-actions">
           <select id="level-select" aria-label="选择关卡"></select>
+          <div class="screen-switch" role="group" aria-label="画面比例">
+            <button id="btn-screen-standard" class="screen-btn active" type="button" aria-pressed="true" title="默认屏 16:10 (F)">标准屏</button>
+            <button id="btn-screen-wide" class="screen-btn" type="button" aria-pressed="false" title="宽屏 16:9 (F)">宽屏</button>
+          </div>
           <span class="toolbar-divider"></span>
           <button id="btn-rot-left" class="btn btn-ghost" title="向左旋转 (Q)">↺</button>
           <button id="btn-rot-right" class="btn btn-ghost" title="向右旋转 (E)">↻</button>
@@ -85,7 +89,7 @@
               <div class="wave-progress-track"><div id="wave-progress-bar" class="wave-progress-fill"></div></div>
             </div>
             <div class="stage-controls">
-              <div class="view-hint">滚轮缩放 · Q/E 旋转 · 右键取消建造</div>
+              <div class="view-hint">滚轮缩放 · Q/E 旋转 · 右键取消建造 · <kbd>F</kbd> 切换宽屏</div>
               <button id="btn-start" class="btn btn-primary btn-lg">开始波次</button>
             </div>
           </div>

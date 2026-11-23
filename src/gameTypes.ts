@@ -36,6 +36,7 @@ export interface Enemy {
   bounty: number;
   damage: number;
   size: number;
+  footprint: number;
   color: string;
   boss: boolean;
   path: PathData;

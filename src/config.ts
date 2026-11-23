@@ -8,19 +8,19 @@ export const HEIGHT = ROWS * TILE;
 export const BASE_TILE: [number, number] = [22, 7];
 
 export const ENEMY_CONFIG: Record<EnemyType, EnemyConfig> = {
-  infantry: { name: '步兵', hp: 42, speed: 46, armor: 0, bounty: 8, damage: 1, color: '#d9c27a', kind: 'ground', size: 7 },
-  truck:    { name: '装甲车', hp: 105, speed: 62, armor: 3, bounty: 14, damage: 2, color: '#b58b4d', kind: 'ground', size: 10 },
-  tank:     { name: '坦克', hp: 340, speed: 30, armor: 12, bounty: 34, damage: 4, color: '#8f9a6a', kind: 'ground', size: 13 },
-  plane:    { name: '飞机', hp: 78, speed: 96, armor: 1, bounty: 18, damage: 2, color: '#9fc4d8', kind: 'air', size: 10 },
-  ship:     { name: '舰船', hp: 420, speed: 26, armor: 9, bounty: 38, damage: 5, color: '#7fa7b8', kind: 'water', size: 15 },
-  mech:     { name: '机甲', hp: 520, speed: 38, armor: 18, bounty: 56, damage: 5, color: '#a89a72', kind: 'ground', size: 16 },
-  drone:    { name: '无人机', hp: 62, speed: 112, armor: 2, bounty: 16, damage: 2, color: '#bcd8e8', kind: 'air', size: 8 },
-  hovercraft:{ name: '气垫船', hp: 280, speed: 54, armor: 6, bounty: 30, damage: 4, color: '#8fc9cf', kind: 'water', size: 14 },
-  strider:  { name: '步行者', hp: 920, speed: 25, armor: 24, bounty: 82, damage: 8, color: '#c3aad9', kind: 'ground', size: 18 },
-  bomber:   { name: '轰炸机', hp: 320, speed: 58, armor: 8, bounty: 48, damage: 7, color: '#b9a6c8', kind: 'air', size: 14 },
-  helicopter:{ name: '武装直升机', hp: 210, speed: 74, armor: 5, bounty: 36, damage: 5, color: '#9dbf9a', kind: 'air', size: 12 },
-  destroyer:{ name: '驱逐舰', hp: 640, speed: 32, armor: 14, bounty: 58, damage: 7, color: '#8fa8c0', kind: 'water', size: 18 },
-  submarine:{ name: '潜艇', hp: 380, speed: 42, armor: 10, bounty: 44, damage: 6, color: '#6e8fa8', kind: 'water', size: 13 },
+  infantry: { name: '步兵', hp: 42, speed: 46, armor: 0, bounty: 8, damage: 1, color: '#d9c27a', kind: 'ground', size: 7, footprint: 28 },
+  truck:    { name: '装甲车', hp: 105, speed: 62, armor: 3, bounty: 14, damage: 2, color: '#b58b4d', kind: 'ground', size: 10, footprint: 42 },
+  tank:     { name: '坦克', hp: 340, speed: 30, armor: 12, bounty: 34, damage: 4, color: '#8f9a6a', kind: 'ground', size: 13, footprint: 54 },
+  plane:    { name: '飞机', hp: 78, speed: 96, armor: 1, bounty: 18, damage: 2, color: '#9fc4d8', kind: 'air', size: 10, footprint: 44 },
+  ship:     { name: '舰船', hp: 420, speed: 26, armor: 9, bounty: 38, damage: 5, color: '#7fa7b8', kind: 'water', size: 15, footprint: 66 },
+  mech:     { name: '机甲', hp: 520, speed: 38, armor: 18, bounty: 56, damage: 5, color: '#a89a72', kind: 'ground', size: 16, footprint: 60 },
+  drone:    { name: '无人机', hp: 62, speed: 112, armor: 2, bounty: 16, damage: 2, color: '#bcd8e8', kind: 'air', size: 8, footprint: 30 },
+  hovercraft:{ name: '气垫船', hp: 280, speed: 54, armor: 6, bounty: 30, damage: 4, color: '#8fc9cf', kind: 'water', size: 14, footprint: 58 },
+  strider:  { name: '步行者', hp: 920, speed: 25, armor: 24, bounty: 82, damage: 8, color: '#c3aad9', kind: 'ground', size: 18, footprint: 72 },
+  bomber:   { name: '轰炸机', hp: 320, speed: 58, armor: 8, bounty: 48, damage: 7, color: '#b9a6c8', kind: 'air', size: 14, footprint: 60 },
+  helicopter:{ name: '武装直升机', hp: 210, speed: 74, armor: 5, bounty: 36, damage: 5, color: '#9dbf9a', kind: 'air', size: 12, footprint: 50 },
+  destroyer:{ name: '驱逐舰', hp: 640, speed: 32, armor: 14, bounty: 58, damage: 7, color: '#8fa8c0', kind: 'water', size: 18, footprint: 78 },
+  submarine:{ name: '潜艇', hp: 380, speed: 42, armor: 10, bounty: 44, damage: 6, color: '#6e8fa8', kind: 'water', size: 13, footprint: 50 },
 };
 
 export const TOWER_CONFIG: Record<TowerType, TowerConfig> = {

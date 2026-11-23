@@ -352,7 +352,7 @@ export class Renderer3D {
     this.camera.lookAt(0, 0, 0);
   }
 
-  private resize() {
+  resize() {
     const w = this.canvas.clientWidth || 960;
     const h = this.canvas.clientHeight || 600;
     this.renderer.setSize(w, h, false);

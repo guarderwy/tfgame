@@ -303,12 +303,12 @@ function wavesFor(level: number): Wave[] {
       if (extra && !selected.includes(extra)) selected.push(extra);
     }
 
-    // 按路线分配数量：每条路线至少 2 个单位形成编队，避免"一个人/一艘船"的稀疏感。
-    // 地面作为主力至少 3 个，水军/空军编队规模随关卡缓慢扩大。
-    const flankSize = Math.max(2, Math.min(4, 1 + Math.floor(level / 6)));
+    // 按路线分配数量：每条路线至少 5 个单位形成有规模的编队，随关卡缓慢增长。
+    // 地面作为主力额外增加，水军/空军编队规模稳定在 5 个以上。
+    const flankSize = Math.min(8, 5 + Math.floor(level / 6));
     const counts = selected.map((type) => {
       const kind = ENEMY_CONFIG[type].kind;
-      if (kind === 'ground') return Math.max(3, Math.round(total * 0.5));
+      if (kind === 'ground') return flankSize + 2;
       return flankSize;
     });
     const groups = selected.map((type, idx) => {
