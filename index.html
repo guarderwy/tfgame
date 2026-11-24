@@ -25,19 +25,31 @@
 
         <div class="top-actions">
           <select id="level-select" aria-label="选择关卡"></select>
-          <div class="screen-switch" role="group" aria-label="画面比例">
-            <button id="btn-screen-standard" class="screen-btn active" type="button" aria-pressed="true" title="默认屏 16:10 (F)">标准屏</button>
-            <button id="btn-screen-wide" class="screen-btn" type="button" aria-pressed="false" title="宽屏 16:9 (F)">宽屏</button>
-          </div>
-          <span class="toolbar-divider"></span>
-          <button id="btn-rot-left" class="btn btn-ghost" title="向左旋转 (Q)">↺</button>
-          <button id="btn-rot-right" class="btn btn-ghost" title="向右旋转 (E)">↻</button>
-          <button id="btn-cam-reset" class="btn btn-ghost" title="重置视角">视角</button>
-          <span class="toolbar-divider"></span>
-          <button id="btn-speed" class="btn btn-ghost">速度 1x</button>
-          <button id="btn-music" class="btn btn-ghost">音乐 开</button>
-          <button id="btn-audio" class="btn btn-ghost">音效 开</button>
-          <button id="btn-pause" class="btn btn-ghost">暂停</button>
+          <button id="btn-deploy" class="btn btn-ghost" type="button">战术部署</button>
+          <button id="btn-codex" class="btn btn-ghost" type="button">敌人图鉴</button>
+
+          <details class="tool-menu">
+            <summary>视图</summary>
+            <div class="menu-pop">
+              <button id="btn-screen-standard" class="menu-item active" type="button">标准屏 16:10</button>
+              <button id="btn-screen-wide" class="menu-item" type="button">宽屏 16:9</button>
+              <div class="menu-sep"></div>
+              <button id="btn-rot-left" class="menu-item" type="button">↺ 向左旋转</button>
+              <button id="btn-rot-right" class="menu-item" type="button">↻ 向右旋转</button>
+              <button id="btn-cam-reset" class="menu-item" type="button">重置视角</button>
+            </div>
+          </details>
+
+          <details class="tool-menu">
+            <summary>系统</summary>
+            <div class="menu-pop">
+              <button id="btn-speed" class="menu-item" type="button">速度 1x</button>
+              <button id="btn-pause" class="menu-item" type="button">暂停</button>
+              <div class="menu-sep"></div>
+              <button id="btn-music" class="menu-item" type="button">音乐 开</button>
+              <button id="btn-audio" class="menu-item" type="button">音效 开</button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -45,10 +57,9 @@
         <aside class="panel build-panel">
           <h2>战术部署</h2>
           <div class="panel-tabs">
-            <button class="tab active" data-tab="build">武器部署 <span class="tab-count">9</span></button>
-            <button class="tab" data-tab="codex">敌人图鉴 <span class="tab-count">13</span></button>
+            <button class="tab active" data-tab="build" type="button">武器部署 <span class="tab-count">9</span></button>
+            <button class="tab" data-tab="codex" type="button">敌人图鉴 <span class="tab-count">13</span></button>
           </div>
-
           <div id="tab-build" class="tab-content">
             <p class="hint">选择武器后点击地图空地建造，右键取消</p>
             <div id="tower-list" class="tower-list"></div>
@@ -59,10 +70,20 @@
               <div><i class="dot air"></i>空中航线 · 飞行单位</div>
             </div>
           </div>
-
           <div id="tab-codex" class="tab-content hidden">
-            <p class="hint">敌军单位档案 · 点击卡片在右侧查看属性与克制建议</p>
+            <p class="hint">敌军单位档案 · 点击卡片查看属性与克制建议</p>
             <div id="enemy-codex" class="enemy-codex"></div>
+          </div>
+          <div class="tips">
+            <h3>作战提示</h3>
+            <ul>
+              <li>榴弹炮对集群地面单位效果最佳。</li>
+              <li>飞机需要防空炮拦截，舰船只能由岸防炮攻击。</li>
+              <li>电磁轨道炮无视护甲，电弧塔可连锁多个目标。</li>
+              <li>水雷布设器建在水边陆地，定时向水路布雷。</li>
+              <li>升级布设器可同时布下更多水雷（3→4→5 颗）。</li>
+              <li>路线上不能建造，注意留出火力覆盖。</li>
+            </ul>
           </div>
         </aside>
 
@@ -94,46 +115,42 @@
             </div>
           </div>
         </section>
-
-        <aside class="panel info-panel">
-          <h2>单位详情</h2>
-          <div id="tab-detail" class="tab-content">
-            <div id="info-empty" class="info-empty">选择武器、炮台或敌人单位查看详情</div>
-            <div id="info-detail" class="hidden">
-              <div class="info-gallery" id="info-gallery">
-                <div class="gallery-art"><div id="info-icon" class="gallery-icon"></div></div>
-                <div class="gallery-meta">
-                  <h3 id="info-name">炮台</h3>
-                  <div id="info-tags" class="info-tags"></div>
-                  <span id="info-kind" class="gallery-kind">单位图鉴</span>
-                </div>
-              </div>
-              <div class="info-row"><span id="info-k1">等级</span><strong id="info-level">1</strong></div>
-              <div class="info-row"><span id="info-k2">伤害</span><strong id="info-damage">0</strong></div>
-              <div class="info-row"><span id="info-k3">射程</span><strong id="info-range">0</strong></div>
-              <div class="info-row"><span id="info-k4">射速</span><strong id="info-rate">0</strong></div>
-              <div class="info-row"><span id="info-k5">目标</span><strong id="info-target">-</strong></div>
-              <p id="info-desc" class="info-desc"></p>
-              <div id="info-actions" class="info-actions">
-                <button id="btn-upgrade" class="btn btn-primary">升级</button>
-                <button id="btn-sell" class="btn">出售</button>
-              </div>
-            </div>
-            <div class="tips">
-              <h3>作战提示</h3>
-              <ul>
-                <li>榴弹炮对集群地面单位效果最佳。</li>
-                <li>飞机需要防空炮拦截，舰船只能由岸防炮攻击。</li>
-                <li>电磁轨道炮无视护甲，电弧塔可连锁多个目标。</li>
-                <li>水雷布设器建在水边陆地，定时向水路布雷，舰船触碰即引爆。</li>
-                <li>升级布设器可同时布下更多水雷（3→4→5 颗）。</li>
-                <li>路线上不能建造，注意留出火力覆盖。</li>
-              </ul>
-            </div>
-          </div>
-        </aside>
       </main>
     </div>
+
+    <div id="detail-modal" class="modal hidden">
+      <div class="modal-backdrop" data-close="detail-modal"></div>
+      <div class="modal-dialog modal-dialog-sm">
+        <div class="modal-head">
+          <h2>单位详情</h2>
+          <button class="modal-close" data-close="detail-modal" type="button" aria-label="关闭">✕</button>
+        </div>
+        <div id="tab-detail" class="tab-content">
+          <div id="info-empty" class="info-empty">选择武器、炮台或敌人单位查看详情</div>
+          <div id="info-detail" class="hidden">
+            <div class="info-gallery" id="info-gallery">
+              <div class="gallery-art"><div id="info-icon" class="gallery-icon"></div></div>
+              <div class="gallery-meta">
+                <h3 id="info-name">炮台</h3>
+                <div id="info-tags" class="info-tags"></div>
+                <span id="info-kind" class="gallery-kind">单位图鉴</span>
+              </div>
+            </div>
+            <div class="info-row"><span id="info-k1">等级</span><strong id="info-level">1</strong></div>
+            <div class="info-row"><span id="info-k2">伤害</span><strong id="info-damage">0</strong></div>
+            <div class="info-row"><span id="info-k3">射程</span><strong id="info-range">0</strong></div>
+            <div class="info-row"><span id="info-k4">射速</span><strong id="info-rate">0</strong></div>
+            <div class="info-row"><span id="info-k5">目标</span><strong id="info-target">-</strong></div>
+            <p id="info-desc" class="info-desc"></p>
+            <div id="info-actions" class="info-actions">
+              <button id="btn-upgrade" class="btn btn-primary" type="button">升级</button>
+              <button id="btn-sell" class="btn" type="button">出售</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

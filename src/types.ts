@@ -18,6 +18,7 @@ export interface EnemyConfig {
   kind: PathKind;
   size: number;
   footprint?: number;
+  ability?: 'dash' | 'regen';
 }
 
 export interface TowerConfig {

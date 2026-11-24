@@ -115,6 +115,8 @@ export class Game {
     this.buildEnemyCodex();
     this.fillLevelSelect();
     this.bindTabs();
+    this.showTab('build');
+    this.bindModals();
     this.bindEvents();
     this.loadLevel(1);
     this.lastTime = performance.now();
@@ -167,6 +169,20 @@ export class Game {
     }
   }
 
+  private smokePuff(x: number, y: number, z: number, density = 5) {
+    if (this.particles.length > 320) this.particles.splice(0, this.particles.length - 280);
+    const life = 0.55 + density * 0.02;
+    this.particles.push({
+      id: ++this.id,
+      x, y, z,
+      vx: 0, vy: 0, vz: 0,
+      life, maxLife: life,
+      color: '#d3d9d2',
+      size: 0.16 + density * 0.012,
+      smoke: true,
+    });
+  }
+
   private fillLevelSelect() {
     const sel = $('level-select') as HTMLSelectElement;
     sel.innerHTML = LEVELS.map((l) => `<option value="${l.id}">第 ${l.id} 关 · ${l.name}</option>`).join('');
@@ -209,6 +225,8 @@ export class Game {
     document.querySelectorAll<HTMLElement>('.build-panel .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     $('tab-build').classList.toggle('hidden', name !== 'build');
     $('tab-codex').classList.toggle('hidden', name !== 'codex');
+    $('btn-deploy').classList.toggle('active', name === 'build');
+    $('btn-codex').classList.toggle('active', name === 'codex');
   }
 
   private setInfoIcon(type: string, color: string, kind: string) {
@@ -244,6 +262,26 @@ export class Game {
     });
   }
 
+  private openModal(id: string) {
+    $(id).classList.remove('hidden');
+  }
+
+  private closeModal(id: string) {
+    $(id).classList.add('hidden');
+  }
+
+  private bindModals() {
+    const jumpToPanel = (tab: 'build' | 'codex') => {
+      this.showTab(tab);
+      document.querySelector('.build-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    $('btn-deploy').addEventListener('click', () => jumpToPanel('build'));
+    $('btn-codex').addEventListener('click', () => jumpToPanel('codex'));
+    document.querySelectorAll<HTMLElement>('[data-close]').forEach((el) => {
+      el.addEventListener('click', () => this.closeModal(el.dataset.close as string));
+    });
+  }
+
   private buildEnemyCodex() {
     const box = $('enemy-codex');
     const order: EnemyType[] = [
@@ -271,6 +309,7 @@ export class Game {
         const type = btn.dataset.type as EnemyType;
         box.querySelectorAll('.enemy-card').forEach((b) => b.classList.toggle('active', b === btn));
         this.showEnemyDetail(type);
+        this.openModal('detail-modal');
       });
     });
   }
@@ -300,14 +339,14 @@ export class Game {
       tank: '厚重装甲，优先电磁轨道炮穿甲或榴弹炮集火。',
       plane: '高速空中单位，需防空炮、防空爆破炮或激光炮拦截。',
       ship: '高生命水路单位，使用岸防炮或电磁轨道炮攻击。',
-      mech: '重甲地面单位，电磁轨道炮无视护甲效果最佳。',
-      drone: '极快空中目标，防空炮与激光炮的高射速更可靠。',
+      mech: '重甲且可自我修复，电磁轨道炮穿甲与持续集火最有效。',
+      drone: '极快并会周期性冲刺，防空炮与激光炮的高射速更可靠。',
       hovercraft: '高速水路单位，岸防炮配合电磁轨道炮拦截。',
-      strider: '超高生命的终极地面单位，集中穿甲与连锁火力。',
-      bomber: '重装轰炸机，生命厚且伤害高，需多台防空炮与激光炮集火。',
-      helicopter: '灵活直升机，速度较快，防空爆破炮的范围伤害尤为有效。',
-      destroyer: '重型驱逐舰，装甲厚实，优先电磁轨道炮穿甲与岸防炮集火。',
-      submarine: '高速潜艇，岸防炮射速与电磁轨道炮穿甲可有效拦截。',
+      strider: '超高生命且持续恢复，集中穿甲与连锁火力快速压制。',
+      bomber: '重装轰炸机并带自我修复，需多台防空炮与激光炮持续集火。',
+      helicopter: '灵活直升机且会冲刺加速，防空爆破炮的范围伤害尤为有效。',
+      destroyer: '重型驱逐舰，装甲厚实且能修复，优先穿甲与岸防炮集火。',
+      submarine: '高速潜艇并会冲刺，岸防炮射速与电磁轨道炮穿甲可有效拦截。',
     };
     return notes[type] || '根据类型选择合适的武器拦截。';
   }
@@ -358,6 +397,7 @@ export class Game {
       const tower = this.towerAt.get(key(tx, ty));
       this.selected = tower ?? null;
       this.syncInfo();
+      if (tower) this.openModal('detail-modal');
     });
     this.canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -395,8 +435,14 @@ export class Game {
       if (!muted) this.audio.unlock();
     });
     document.addEventListener('click', () => this.audio.unlock(), { once: true });
-    $('btn-upgrade').addEventListener('click', () => this.upgradeSelected());
-    $('btn-sell').addEventListener('click', () => this.sellSelected());
+    $('btn-upgrade').addEventListener('click', () => {
+      this.upgradeSelected();
+      this.closeModal('detail-modal');
+    });
+    $('btn-sell').addEventListener('click', () => {
+      this.sellSelected();
+      this.closeModal('detail-modal');
+    });
     $('btn-retry').addEventListener('click', () => this.loadLevel(this.level.id));
     $('btn-next').addEventListener('click', () => this.loadLevel(Math.min(LEVELS.length, this.level.id + 1)));
 
@@ -406,7 +452,13 @@ export class Game {
         '5': 'laser', '6': 'flak', '7': 'railgun', '8': 'tesla', '9': 'mine',
       };
       if (map[e.key]) { this.buildType = map[e.key]; this.showTab('build'); this.syncTowerList(); }
-      if (e.key === 'Escape') { this.buildType = null; this.selected = null; this.syncTowerList(); this.syncInfo(); }
+      if (e.key === 'Escape') {
+        this.closeModal('detail-modal');
+        this.buildType = null;
+        this.selected = null;
+        this.syncTowerList();
+        this.syncInfo();
+      }
       if (e.key === 'q' || e.key === 'Q') this.view.rotateBy(-Math.PI / 8);
       if (e.key === 'e' || e.key === 'E') this.view.rotateBy(Math.PI / 8);
       if (e.key === 'f' || e.key === 'F') this.setScreenMode(this.screenMode === 'standard' ? 'wide' : 'standard');
@@ -476,6 +528,7 @@ export class Game {
     this.selected = tower;
     this.audio.build();
     this.burst(pos.x, pos.y, 0.3, 8, cfg.color, 45, 0.08, 0.45);
+    if (cfg.minelayer) this.layMines(tower);
     this.syncAll();
   }
 
@@ -494,6 +547,10 @@ export class Game {
     t.damage *= UPGRADE_FACTOR.damage;
     t.range *= UPGRADE_FACTOR.range;
     t.fireRate *= UPGRADE_FACTOR.fireRate;
+    if (TOWER_CONFIG[t.type].minelayer) {
+      t.refillAll = true;
+      this.layMines(t);
+    }
     this.audio.upgrade();
     this.burst(t.x, t.y, 0.6, 12, '#ffe9a8', 55, 0.08, 0.6);
     this.syncAll();
@@ -519,7 +576,7 @@ export class Game {
 
   private startWave(manual: boolean) {
     if (this.status === 'wave' || this.status === 'won' || this.status === 'lost') return;
-    if (manual && this.status === 'cleared') { this.gold += 8; this.flash('提前出击 +8 金币'); }
+    if (manual && this.status === 'cleared') { this.gold += 12; this.flash('提前出击 +12 金币'); }
     this.waveIndex += 1;
     const wave = this.level.waves[this.waveIndex];
     if (!wave) return;
@@ -546,16 +603,18 @@ export class Game {
       path = makeAirPath();
     }
     if (!path) return;
-    // 编队规模提升后，单个普通单位适当下调血量以维持整体难度；Boss 保持强度。
-    const swarmHp = group.boss ? 1 : 0.58;
+    const swarmHp = group.boss ? 1 : 0.9;
     const hp = cfg.hp * group.hpScale * difficultyScale(this.level.id) * swarmHp;
     this.enemies.push({
       id: ++this.id, type: group.type, kind: cfg.kind, x: path.points[0].x, y: path.points[0].y,
       hp, maxHp: hp, armor: cfg.armor, speed: cfg.speed,
-      bounty: Math.round(cfg.bounty * (0.55 + 0.22 * Math.sqrt(group.hpScale * difficultyScale(this.level.id) - 1)) * swarmHp),
+      bounty: Math.round(cfg.bounty * (0.7 + 0.28 * Math.sqrt(Math.max(0, group.hpScale * difficultyScale(this.level.id) - 1))) * swarmHp),
       damage: cfg.damage, size: cfg.size * (group.boss ? 1.5 : 1),
       footprint: (cfg.footprint ?? cfg.size * 2) * (group.boss ? 1.3 : 1),
       color: cfg.color, boss: !!group.boss,
+      ability: cfg.ability,
+      dashTimer: cfg.ability === 'dash' ? 2 + Math.random() * 2 : 0,
+      dashActive: 0,
       path, index: 0, traveled: 0, angle: 0, dead: false,
     });
   }
@@ -654,9 +713,6 @@ export class Game {
       type: t.type, originX: t.x, originY: t.y,
     });
     this.audio.fire(t.type);
-    const mx = t.x + Math.cos(t.angle) * 16;
-    const my = t.y + Math.sin(t.angle) * 16;
-    this.burst(mx, my, 0.55, t.type === 'machinegun' || t.type === 'aa' ? 2 : 5, cfg.color, 40, 0.07, 0.22);
   }
 
   private damageEnemy(e: Enemy, amount: number, pierce = false) {
@@ -666,58 +722,73 @@ export class Game {
     if (e.hp <= 0) {
       e.dead = true;
       this.gold += e.bounty;
-      this.effects.push({ x: e.x, y: e.y, z: 0.5, r: 4, maxR: e.size * 2.4, life: 0.35, maxLife: 0.35, color: '#ffd08a', kind: 'ring' });
       this.burst(e.x, e.y, 0.35, e.size > 12 ? 12 : 5, '#ffcf82', 65, 0.1, 0.45);
       if (e.size > 12) this.audio.explode(true);
     }
   }
 
-  private segmentHits(x1: number, y1: number, x2: number, y2: number, cx: number, cy: number, r: number) {
+  private segmentHitT(x1: number, y1: number, x2: number, y2: number, cx: number, cy: number, r: number): number | null {
     const dx = x2 - x1, dy = y2 - y1;
     const len2 = dx * dx + dy * dy;
     let t = len2 > 0 ? ((cx - x1) * dx + (cy - y1) * dy) / len2 : 0;
     t = Math.max(0, Math.min(1, t));
     const px = x1 + dx * t, py = y1 + dy * t;
-    return (cx - px) * (cx - px) + (cy - py) * (cy - py) <= r * r;
+    return (cx - px) * (cx - px) + (cy - py) * (cy - py) <= r * r ? t : null;
   }
 
-  private nearestWaterPoint(x: number, y: number, maxDist: number): Point | null {
-    let best: Point | null = null;
-    let bestDist = maxDist;
+  private nearestWaterPoint(x: number, y: number, maxDist: number): { point: Point; tangent: Point } | null {
+    let best: { point: Point; tangent: Point; dist: number } | null = null;
     for (const path of this.waterPaths) {
-      for (const p of path.points) {
+      for (let i = 0; i < path.points.length; i++) {
+        const p = path.points[i];
         const d = Math.hypot(p.x - x, p.y - y);
-        if (d < bestDist) { bestDist = d; best = p; }
+        if (best && d >= best.dist) continue;
+        const prev = path.points[Math.max(0, i - 1)];
+        const next = path.points[Math.min(path.points.length - 1, i + 1)];
+        const tx = next.x - prev.x;
+        const ty = next.y - prev.y;
+        const len = Math.hypot(tx, ty) || 1;
+        best = { point: p, tangent: { x: tx / len, y: ty / len }, dist: d };
       }
     }
-    return best;
+    return best && best.dist <= maxDist ? { point: best.point, tangent: best.tangent } : null;
+  }
+
+  private placeMine(t: Tower, spot: { point: Point; tangent: Point }) {
+    const cfg = TOWER_CONFIG[t.type];
+    t.angle = Math.atan2(spot.point.y - t.y, spot.point.x - t.x);
+    for (let slot = 0; slot < 5; slot++) {
+      const offset = (slot - 2) * 26;
+      const x = spot.point.x + spot.tangent.x * offset;
+      const y = spot.point.y + spot.tangent.y * offset;
+      if (this.mines.some((m) => Math.hypot(m.x - x, m.y - y) < 10)) continue;
+      this.mines.push({
+        id: ++this.id, ownerId: t.id, x, y,
+        damage: t.damage, splash: cfg.splash, color: cfg.color,
+      });
+      return true;
+    }
+    return false;
   }
 
   private layMines(t: Tower) {
     const cfg = TOWER_CONFIG[t.type];
     const existing = this.mines.filter((m) => m.ownerId === t.id).length;
     const capacity = t.level + 2;
-    const deficit = capacity - existing;
-    if (deficit <= 0) return;
-    // 首次建好一次布满；之后每个周期只补 1 颗（炸一颗少一颗，逐颗补充）
-    const need = t.initialized ? 1 : deficit;
+    if (existing >= capacity) return;
+    const full = !t.initialized || t.refillAll;
+    const need = full ? capacity - existing : 1;
     t.initialized = true;
-    const point = this.nearestWaterPoint(t.x, t.y, t.range);
-    if (!point) return;
-    const dx = point.x - t.x;
-    const dy = point.y - t.y;
-    const d = Math.hypot(dx, dy) || 1;
-    t.angle = Math.atan2(dy, dx);
+    t.refillAll = false;
+    const spot = this.nearestWaterPoint(t.x, t.y, t.range);
+    if (!spot) return;
+    let placed = 0;
     for (let i = 0; i < need; i++) {
-      const spread = (i - (need - 1) / 2) * 22;
-      this.mines.push({
-        id: ++this.id, ownerId: t.id,
-        x: point.x - (dy / d) * spread,
-        y: point.y + (dx / d) * spread,
-        damage: t.damage, splash: cfg.splash, color: cfg.color,
-      });
+      if (!this.placeMine(t, spot)) break;
+      placed++;
     }
-    this.burst(point.x, point.y, 0.3, 6, cfg.color, 55, 0.1, 0.4);
+    if (!placed) return;
+    this.burst(spot.point.x, spot.point.y, 0.3, 6, cfg.color, 55, 0.1, 0.4);
     this.audio.fire('coastal');
   }
 
@@ -744,6 +815,7 @@ export class Game {
   }
 
   private hit(p: Projectile) {
+    p.alive = false;
     const px = p.lastX;
     const py = p.lastY;
     const hitZ = p.target?.kind === 'air' ? 1.3 : 0.5;
@@ -764,15 +836,7 @@ export class Game {
       for (const e of this.enemies) {
         if (!e.dead && Math.hypot(e.x - px, e.y - py) <= p.splash) this.damageEnemy(e, p.damage, p.pierceArmor);
       }
-      this.effects.push({
-        x: px, y: py, z: hitZ, r: 4, maxR: p.splash, life: 0.32, maxLife: 0.32,
-        color: p.color, kind: 'ring',
-      });
-      this.effects.push({
-        x: px, y: py, z: hitZ, r: 2, maxR: Math.min(p.splash * 0.45, 16), life: 0.16, maxLife: 0.16,
-        color: '#fff3d6', kind: 'flash',
-      });
-      this.burst(px, py, hitZ, 10, p.color, 80, 0.1, 0.4);
+      this.smokePuff(px, py, hitZ, 7);
       this.audio.explode(false);
     } else {
       let hitAny = false;
@@ -786,7 +850,7 @@ export class Game {
           .sort((a, b) => Math.hypot(a.x - px, a.y - py) - Math.hypot(b.x - px, b.y - py))
           .slice(0, p.chain);
         candidates.forEach((e) => {
-          this.damageEnemy(e, p.damage * 0.7, p.pierceArmor);
+          this.damageEnemy(e, p.damage * 0.6, p.pierceArmor);
           if (arcPoints.length) arcPoints.push({ x: e.x, y: e.y });
         });
         hitAny = true;
@@ -796,19 +860,11 @@ export class Game {
           x: px, y: py, z: hitZ, r: 0, maxR: 0, life: 0.3, maxLife: 0.3,
           color: '#f0e6ff', color2: p.color, kind: 'arc', points: arcPoints, width: 0.07,
         });
-        this.burst(px, py, hitZ, 8, p.color, 60, 0.07, 0.3);
+        this.smokePuff(px, py, hitZ, 5);
       } else if (hitAny) {
-        const flashColor = p.type === 'railgun' ? '#dff0ff'
-          : p.type === 'laser' ? '#ffffff'
-          : p.type === 'machinegun' || p.type === 'aa' ? '#fff0b0' : '#ffffff';
-        this.effects.push({
-          x: px, y: py, z: hitZ, r: 2, maxR: p.type === 'railgun' ? 16 : 10,
-          life: 0.16, maxLife: 0.16, color: flashColor, kind: 'flash',
-        });
-        this.burst(px, py, hitZ, p.type === 'railgun' ? 8 : 4, p.color, 55, 0.07, 0.24);
+        this.smokePuff(px, py, hitZ, p.type === 'railgun' ? 6 : 4);
       }
     }
-    p.alive = false;
   }
 
   private reachBase(e: Enemy) {
@@ -851,13 +907,26 @@ export class Game {
 
       for (const e of this.enemies) {
         if (e.dead) continue;
+        const eCfg = ENEMY_CONFIG[e.type];
+        if (eCfg.ability === 'regen' && e.hp < e.maxHp) {
+          e.hp = Math.min(e.maxHp, e.hp + e.maxHp * 0.008 * sdt);
+        }
+        let moveSpeed = e.speed;
+        if (eCfg.ability === 'dash') {
+          e.dashTimer = (e.dashTimer ?? 0) - sdt;
+          if (e.dashTimer <= 0) { e.dashTimer = 4.5; e.dashActive = 1.1; }
+          if ((e.dashActive ?? 0) > 0) {
+            e.dashActive = Math.max(0, e.dashActive - sdt);
+            moveSpeed *= 1.7;
+          }
+        }
         const before = e.traveled;
         const next = e.path.points[e.index + 1];
         if (!next) { this.reachBase(e); continue; }
         const dx = next.x - e.x;
         const dy = next.y - e.y;
         const d = Math.hypot(dx, dy);
-        const step = e.speed * sdt;
+        const step = moveSpeed * sdt;
         e.angle = Math.atan2(dy, dx);
         if (d <= step) {
           e.x = next.x; e.y = next.y;
@@ -916,17 +985,24 @@ export class Game {
         p.lastX = p.x;
         p.lastY = p.y;
         if (p.x < 0 || p.x > WIDTH || p.y < 0 || p.y > HEIGHT) { p.alive = false; continue; }
-        let collided = false;
+        let hitT: number | null = null;
+        let hitEnemy: Enemy | null = null;
         for (const e of this.enemies) {
           if (e.dead) continue;
           const reach = Math.max(9, e.size * 0.6 + 3);
-          if (this.segmentHits(segX, segY, p.x, p.y, e.x, e.y, reach)) {
-            p.target = e;
-            collided = true;
-            break;
-          }
+          const t = this.segmentHitT(segX, segY, p.x, p.y, e.x, e.y, reach);
+          if (t !== null) { hitT = t; hitEnemy = e; break; }
         }
-        if (collided || p.distance >= p.maxDistance) this.hit(p);
+        if (hitT !== null) {
+          p.x = segX + (p.x - segX) * hitT;
+          p.y = segY + (p.y - segY) * hitT;
+          p.lastX = p.x;
+          p.lastY = p.y;
+          if (hitEnemy) p.target = hitEnemy;
+          this.hit(p);
+          continue;
+        }
+        if (p.distance >= p.maxDistance) this.hit(p);
       }
 
       this.enemies = this.enemies.filter((e) => !e.dead);
@@ -939,7 +1015,7 @@ export class Game {
         } else {
           this.status = 'cleared';
           this.countdown = 6;
-          this.gold += 15;
+          this.gold += 24;
         }
       }
     }
@@ -951,13 +1027,15 @@ export class Game {
 
     this.particles = this.particles.filter((p) => {
       p.life -= sdt;
-      p.x += p.vx * sdt;
-      p.y += p.vz * sdt;
-      p.z += p.vy * sdt;
-      p.vy -= 190 * sdt;
-      p.vx *= 0.97;
-      p.vz *= 0.97;
-      if (p.z < 0) { p.z = 0; p.vy *= -0.25; }
+      if (!p.smoke) {
+        p.x += p.vx * sdt;
+        p.y += p.vz * sdt;
+        p.z += p.vy * sdt;
+        p.vy -= 190 * sdt;
+        p.vx *= 0.97;
+        p.vz *= 0.97;
+        if (p.z < 0) { p.z = 0; p.vy *= -0.25; }
+      }
       return p.life > 0;
     });
   }
@@ -1031,11 +1109,17 @@ export class Game {
     $('info-rate').textContent = cfg.minelayer ? `${(1 / t.fireRate).toFixed(1)} 秒` : `${t.fireRate.toFixed(1)} /秒`;
     $('info-target').textContent = cfg.minelayer ? Math.round(t.range).toString() : cfg.targets.map((x) => x === 'ground' ? '地面' : x === 'air' ? '空中' : '水路').join('/');
     $('info-desc').textContent = cfg.desc;
+    this.syncUpgradeButton();
+    ($('btn-sell') as HTMLButtonElement).textContent = `出售 +${Math.round(t.totalCost * SELL_REFUND)}`;
+  }
+
+  private syncUpgradeButton() {
+    const t = this.selected;
+    if (!t || $('detail-modal').classList.contains('hidden')) return;
     const up = $('btn-upgrade') as HTMLButtonElement;
     const cost = this.upgradeCost(t);
     up.textContent = t.level >= MAX_LEVEL ? '已满级' : `升级 ${cost}`;
     up.disabled = t.level >= MAX_LEVEL || this.gold < cost;
-    ($('btn-sell') as HTMLButtonElement).textContent = `出售 +${Math.round(t.totalCost * SELL_REFUND)}`;
   }
 
   private syncUI() {
@@ -1083,5 +1167,6 @@ export class Game {
       start.disabled = false;
     }
     this.syncTowerList();
+    this.syncUpgradeButton();
   }
 }

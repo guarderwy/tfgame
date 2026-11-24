@@ -175,6 +175,26 @@ function cfgAccent(color: string) {
   return color;
 }
 
+function glowMat(color: number | string, intensity = 0.9) {
+  return new THREE.MeshStandardMaterial({
+    color, emissive: new THREE.Color(color), emissiveIntensity: intensity,
+    roughness: 0.35, metalness: 0.2,
+  });
+}
+
+function metalMat(color: number | string, metalness = 0.6, roughness = 0.4) {
+  return new THREE.MeshStandardMaterial({ color, metalness, roughness });
+}
+
+function addEdges(mesh: THREE.Mesh, opacity = 0.45) {
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(mesh.geometry, 32),
+    new THREE.LineBasicMaterial({ color: '#151812', transparent: true, opacity }),
+  );
+  mesh.add(edges);
+  return mesh;
+}
+
 function hullGeometry(length: number, beam: number, depth: number, deckY: number): THREE.BufferGeometry {
   const sections = [
     { z: -length * 0.5, w: beam * 0.38 },
@@ -226,13 +246,12 @@ function deckShape(length: number, beam: number): THREE.Shape {
 }
 
 function disposeObject(obj: THREE.Object3D) {
-  obj.traverse((child) => {
-    const m = child as THREE.Mesh;
-    if (m.geometry) m.geometry.dispose();
-    const material = (m as any).material;
-    if (Array.isArray(material)) material.forEach((x) => x.dispose());
-    else if (material) material.dispose();
-  });
+  const m = obj as THREE.Mesh;
+  if (m.geometry) m.geometry.dispose();
+  const material = (m as any).material;
+  if (Array.isArray(material)) material.forEach((x) => x.dispose());
+  else if (material) material.dispose();
+  [...obj.children].forEach(disposeObject);
 }
 
 export class Renderer3D {
@@ -261,7 +280,7 @@ export class Renderer3D {
   private barMeshes = new Map<Enemy, THREE.Group>();
   private projMeshes = new Map<Projectile, THREE.Object3D>();
   private effectMeshes = new Map<Effect, THREE.Object3D>();
-  private particleMeshes = new Map<Particle, THREE.Mesh>();
+  private particleMeshes = new Map<Particle, THREE.Object3D>();
   private ripples: { mesh: THREE.Mesh; phase: number }[] = [];
 
   private rangeMesh: THREE.Mesh;
@@ -859,6 +878,96 @@ export class Renderer3D {
     return g;
   }
 
+  private addBossCrown(g: THREE.Group, e: Enemy) {
+    const crown = new THREE.Group();
+    const gold = mat('#f2c66a', { metalness: 0.7, roughness: 0.25, emissive: new THREE.Color('#8a5a12'), emissiveIntensity: 0.35 });
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.12, 8), gold);
+    crown.add(band);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 5), gold);
+      spike.position.set(Math.cos(a) * 0.19, 0.14, Math.sin(a) * 0.19);
+      crown.add(spike);
+    }
+    crown.position.y = e.kind === 'air' ? 0.62 : e.type === 'strider' ? 1.65 : e.type === 'tank' || e.type === 'mech' ? 1.5 : 1.0;
+    g.add(crown);
+  }
+
+  private decorateTower(g: THREE.Group, t: Tower, pivot: THREE.Group, color: string): THREE.Mesh[] {
+    const steel = metalMat('#4c5147', 0.78, 0.34);
+    const dark = metalMat('#252922', 0.55, 0.5);
+    const glow = glowMat(color, 1.15);
+    const pulse: THREE.Mesh[] = [];
+    const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
+      const m = shadow(new THREE.Mesh(geo, material));
+      m.position.set(x, y, z);
+      m.rotation.set(rx, ry, rz);
+      parent.add(m);
+      return m;
+    };
+
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      add(g, new THREE.CylinderGeometry(0.026, 0.026, 0.035, 6), steel, Math.cos(a) * 0.35, 0.28, Math.sin(a) * 0.35);
+    }
+    for (let i = 0; i < t.level; i++) {
+      add(g, new THREE.BoxGeometry(0.15, 0.11, 0.05), steel, -0.2 + i * 0.2, 0.2, 0.4);
+    }
+    g.children.slice(0, 3).forEach((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && mesh.geometry) addEdges(mesh, 0.38);
+    });
+
+    switch (t.type) {
+      case 'machinegun':
+        [-0.12, 0.12].forEach((x) => {
+          add(pivot, new THREE.CylinderGeometry(0.03, 0.035, 0.62, 8), dark, x, 0.02, 0.36, Math.PI / 2);
+        });
+        add(pivot, new THREE.BoxGeometry(0.22, 0.18, 0.24), steel, -0.34, -0.02, 0);
+        pulse.push(add(pivot, new THREE.SphereGeometry(0.045, 8, 6), glow, 0, 0.02, 0.7));
+        break;
+      case 'howitzer':
+        add(pivot, new THREE.CylinderGeometry(0.135, 0.135, 0.1, 10), steel, 0, 0, 0.82, Math.PI / 2);
+        add(pivot, new THREE.TorusGeometry(0.13, 0.025, 6, 12), dark, 0, 0, 0.88, 0, 0, 0);
+        add(pivot, new THREE.CylinderGeometry(0.12, 0.14, 0.28, 8), steel, 0, 0, 0.18, Math.PI / 2);
+        pulse.push(add(pivot, new THREE.BoxGeometry(0.06, 0.04, 0.3), glow, 0, 0.16, 0.42));
+        break;
+      case 'aa':
+        [-0.13, 0.13].forEach((x) => add(pivot, new THREE.CylinderGeometry(0.035, 0.04, 0.7, 8), dark, x, 0.06, 0.38, Math.PI / 2 - 0.28));
+        add(g, new THREE.TorusGeometry(0.16, 0.018, 5, 16), steel, 0.3, 0.72, -0.12, Math.PI / 2 - 0.4);
+        pulse.push(add(g, new THREE.SphereGeometry(0.05, 8, 6), glow, 0.3, 0.72, -0.12));
+        break;
+      case 'coastal':
+        add(pivot, new THREE.BoxGeometry(0.62, 0.34, 0.06), steel, 0, 0.02, 0.22, -0.18);
+        add(pivot, new THREE.CylinderGeometry(0.14, 0.14, 0.14, 10), dark, 0, 0, 0.8, Math.PI / 2);
+        add(g, new THREE.BoxGeometry(0.3, 0.08, 0.1), steel, 0, 0.62, -0.06);
+        pulse.push(add(g, new THREE.SphereGeometry(0.04, 8, 6), glow, 0, 0.68, -0.06));
+        break;
+      case 'laser':
+        [0.28, 0.52, 0.76].forEach((z) => pulse.push(add(pivot, new THREE.TorusGeometry(0.12, 0.022, 6, 16), glow, 0, 0, z, 0, 0, 0)));
+        add(pivot, new THREE.BoxGeometry(0.18, 0.18, 0.3), dark, 0, 0, -0.08);
+        break;
+      case 'flak':
+        add(pivot, new THREE.CylinderGeometry(0.05, 0.055, 0.66, 8), dark, 0, 0, 0.4, Math.PI / 2);
+        add(pivot, new THREE.CylinderGeometry(0.16, 0.16, 0.14, 12), steel, -0.32, -0.02, 0, 0, 0, Math.PI / 2);
+        pulse.push(add(pivot, new THREE.TorusGeometry(0.2, 0.02, 6, 18), glow, 0, 0, 0.72));
+        break;
+      case 'railgun':
+        [0.24, 0.48, 0.72].forEach((z) => {
+          add(pivot, new THREE.TorusGeometry(0.2, 0.03, 6, 16), steel, 0, 0, z);
+          pulse.push(add(pivot, new THREE.BoxGeometry(0.07, 0.03, 0.1), glow, -0.16, 0, z));
+          pulse.push(add(pivot, new THREE.BoxGeometry(0.07, 0.03, 0.1), glow, 0.16, 0, z));
+        });
+        add(pivot, new THREE.BoxGeometry(0.46, 0.22, 0.34), dark, 0, 0, -0.18);
+        break;
+      case 'tesla':
+        pulse.push(add(g, new THREE.TorusGeometry(0.24, 0.016, 5, 20), glow, 0, 0.72, 0, Math.PI / 2));
+        add(g, new THREE.CylinderGeometry(0.12, 0.16, 0.22, 8), dark, 0, 0.16, 0);
+        break;
+    }
+    return pulse;
+  }
+
   private createTower(t: Tower): THREE.Group {
     const cfg = TOWER_CONFIG[t.type];
     if (t.type === 'mine') return this.createMineLayerMesh(cfg.color);
@@ -921,8 +1030,122 @@ export class Renderer3D {
       g.add(pip);
       pips.push(pip);
     }
-    g.userData = { pivot, pips };
+    const pulse = this.decorateTower(g, t, pivot, cfg.color);
+    g.userData = { pivot, pips, pulse };
     return g;
+  }
+
+  private decorateEnemy(g: THREE.Group, e: Enemy) {
+    const accent = glowMat(e.color, 0.45);
+    const steel = metalMat('#5b6153', 0.72, 0.34);
+    const dark = metalMat('#262a24', 0.5, 0.5);
+    const lamp = glowMat('#ffe6a8', 1.2);
+    const red = glowMat('#ff6b5d', 1.3);
+    const green = glowMat('#7df0a0', 1.3);
+    const add = (geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
+      const m = shadow(new THREE.Mesh(geo, material));
+      m.position.set(x, y, z);
+      m.rotation.set(rx, ry, rz);
+      g.add(m);
+      return m;
+    };
+    const box = (w: number, h: number, d: number, m: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) =>
+      add(new THREE.BoxGeometry(w, h, d), m, x, y, z, rx, ry, rz);
+    const cyl = (rt: number, rb: number, h: number, s: number, m: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) =>
+      add(new THREE.CylinderGeometry(rt, rb, h, s), m, x, y, z, rx, ry, rz);
+    const sph = (r: number, m: THREE.Material, x: number, y: number, z: number) => add(new THREE.SphereGeometry(r, 10, 8), m, x, y, z);
+
+    g.children.slice(0, 9).forEach((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && mesh.geometry) addEdges(mesh, 0.3);
+    });
+
+    switch (e.type) {
+      case 'infantry':
+        box(0.2, 0.07, 0.04, dark, 0, 0.82, 0.13);
+        box(0.05, 0.3, 0.04, steel, -0.14, 0.52, -0.15, 0, 0, -0.15);
+        box(0.05, 0.3, 0.04, steel, 0.14, 0.52, -0.15, 0, 0, 0.15);
+        sph(0.035, red, 0.14, 0.62, 0.1);
+        box(0.04, 0.04, 0.18, dark, 0.16, 0.56, 0.34);
+        break;
+      case 'truck':
+        box(0.5, 0.06, 0.07, steel, 0, 0.85, 0.44);
+        sph(0.05, lamp, -0.24, 0.55, 0.55);
+        sph(0.05, lamp, 0.24, 0.55, 0.55);
+        box(0.34, 0.2, 0.28, steel, 0, 0.74, -0.3);
+        box(0.26, 0.16, 0.24, dark, 0, 0.74, -0.3);
+        cyl(0.02, 0.02, 0.18, 6, dark, -0.42, 0.74, 0.4, 0, 0, Math.PI / 2);
+        sph(0.05, dark, -0.51, 0.74, 0.4);
+        break;
+      case 'tank':
+        box(0.94, 0.14, 0.1, steel, 0, 0.32, 0.62);
+        box(0.09, 0.12, 0.78, steel, -0.46, 0.32, 0);
+        box(0.09, 0.12, 0.78, steel, 0.46, 0.32, 0);
+        sph(0.05, lamp, -0.28, 0.55, 0.6);
+        sph(0.05, lamp, 0.28, 0.55, 0.6);
+        cyl(0.02, 0.02, 0.42, 6, dark, -0.3, 1.02, -0.16);
+        box(0.2, 0.14, 0.18, steel, 0.24, 0.86, -0.24);
+        break;
+      case 'plane':
+      case 'bomber':
+        sph(0.05, red, -0.88, 0.06, 0);
+        sph(0.05, green, 0.88, 0.06, 0);
+        [-0.4, 0.4].forEach((x) => {
+          cyl(0.08, 0.08, 0.1, 10, accent, x, 0, 0.34, Math.PI / 2);
+          box(0.06, 0.04, 0.3, steel, x, 0.02, -0.16);
+        });
+        if (e.type === 'bomber') {
+          [-0.18, 0.18].forEach((x) => box(0.08, 0.12, 0.32, dark, x, -0.14, -0.02));
+        }
+        break;
+      case 'helicopter':
+        sph(0.06, lamp, 0, -0.12, 0.42);
+        [-0.42, 0.42].forEach((x) => cyl(0.06, 0.06, 0.3, 8, dark, x, -0.1, 0.02, 0, 0, Math.PI / 2));
+        add(new THREE.TorusGeometry(0.14, 0.02, 5, 12), steel, 0.06, 0.1, -0.76, Math.PI / 2);
+        break;
+      case 'ship':
+      case 'destroyer': {
+        const len = e.type === 'destroyer' ? 1.9 : 1.6;
+        [-0.36, 0.36].forEach((x) => box(0.02, 0.08, len * 0.8, steel, x, 0.38, 0));
+        sph(0.07, lamp, 0, 0.78, -0.12);
+        box(0.22, 0.1, 0.12, accent, -0.24, 0.42, -0.6);
+        add(new THREE.CapsuleGeometry(0.08, 0.18, 4, 8), steel, 0.26, 0.46, -0.62, Math.PI / 2);
+        box(0.2, 0.14, 0.01, accent, 0, 1.18, -0.14);
+        break;
+      }
+      case 'submarine':
+        cyl(0.025, 0.025, 0.12, 6, red, 0, 0.58, -0.05);
+        [-0.5, 0.5].forEach((z) => box(0.5, 0.03, 0.06, accent, 0, 0.02, z));
+        break;
+      case 'hovercraft':
+        add(new THREE.TorusGeometry(0.52, 0.035, 6, 18), accent, 0, 0.07, 0, Math.PI / 2);
+        [-0.3, 0.3].forEach((x) => add(new THREE.TorusGeometry(0.14, 0.02, 5, 14), lamp, x, 0.4, -0.57));
+        break;
+      case 'mech':
+      case 'strider':
+        sph(0.11, accent, 0, 0.82, 0.22);
+        [-0.42, 0.42].forEach((x) => {
+          cyl(0.03, 0.03, 0.22, 6, accent, x, 1.0, -0.1);
+          box(0.1, 0.22, 0.12, steel, x, 0.45, -0.04);
+        });
+        box(0.34, 0.08, 0.06, steel, 0, 0.98, 0.2);
+        break;
+      case 'drone':
+        [[-0.32, -0.32], [0.32, -0.32], [-0.32, 0.32], [0.32, 0.32]].forEach(([x, z]) =>
+          add(new THREE.TorusGeometry(0.17, 0.018, 5, 14), accent, x, 0.05, z, Math.PI / 2));
+        sph(0.05, glowMat('#66d0ff', 1.4), 0, -0.02, 0.18);
+        break;
+    }
+    if (e.boss) {
+      const aura = new THREE.Mesh(
+        new THREE.TorusGeometry(0.55, 0.025, 6, 32),
+        new THREE.MeshBasicMaterial({ color: '#f2c66a', transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false }),
+      );
+      aura.rotation.x = Math.PI / 2;
+      aura.position.y = 0.08;
+      aura.userData.bossAura = true;
+      g.add(aura);
+    }
   }
 
   private createEnemy(e: Enemy): THREE.Group {
@@ -1261,21 +1484,8 @@ export class Renderer3D {
       g.add(body, dome, core, mast);
       g.userData = { legs };
     }
-    if (e.boss) {
-      const crown = new THREE.Group();
-      const gold = mat('#f2c66a', { metalness: 0.7, roughness: 0.25, emissive: new THREE.Color('#8a5a12'), emissiveIntensity: 0.35 });
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.12, 8), gold);
-      crown.add(band);
-      for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2;
-        const spike = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 5), gold);
-        spike.position.set(Math.cos(a) * 0.19, 0.14, Math.sin(a) * 0.19);
-        crown.add(spike);
-      }
-      crown.position.y = e.kind === 'air' ? 0.62 : e.type === 'strider' ? 1.65 : e.type === 'tank' || e.type === 'mech' ? 1.5 : 1.0;
-      g.add(crown);
-      g.scale.setScalar(1.18);
-    }
+    this.decorateEnemy(g, e);
+    if (e.boss) { this.addBossCrown(g, e); g.scale.setScalar(1.18); }
     return g;
   }
 
@@ -1310,6 +1520,12 @@ export class Renderer3D {
       mesh.position.set(tileX(t.tx), 0, tileZ(t.ty));
       mesh.userData.pivot.rotation.y = Math.PI / 2 - t.angle;
       mesh.userData.pips.forEach((pip: THREE.Mesh, i: number) => { pip.visible = i < t.level; });
+      (mesh.userData.pulse as THREE.Mesh[] | undefined)?.forEach((part, i) => {
+        const wave = Math.sin(this.clock * 5 + t.id * 0.7 + i * 0.9);
+        part.scale.setScalar(1 + wave * 0.14);
+        const material = part.material as THREE.MeshStandardMaterial;
+        if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 1 + wave * 0.45;
+      });
     });
   }
 
@@ -1384,6 +1600,14 @@ export class Renderer3D {
           leg.rotation.x = Math.sin(this.clock * 8 + i * Math.PI) * 0.32;
         });
       }
+      if (e.boss) {
+        const aura = mesh.children.find((child) => child.userData.bossAura) as THREE.Mesh | undefined;
+        if (aura) {
+          aura.rotation.z = this.clock * 0.9;
+          const auraMat = aura.material as THREE.MeshBasicMaterial;
+          auraMat.opacity = 0.5 + 0.28 * Math.sin(this.clock * 4);
+        }
+      }
 
       const bar = this.barMeshes.get(e)!;
       const barY = e.type === 'drone' ? 0.72 : e.type === 'helicopter' ? 0.65 : e.kind === 'air' ? 1.9
@@ -1405,63 +1629,65 @@ export class Renderer3D {
 
   private createProjectileMesh(p: Projectile): THREE.Object3D {
     const color = p.color;
-    if (p.type === 'laser') {
-      const group = new THREE.Group();
-      const core = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.026, 0.026, 1, 8),
-        new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
-      );
-      const glow = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.085, 0.085, 1, 10),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
-      );
-      group.add(glow, core);
-      return group;
-    }
-    if (p.type === 'tesla') {
-      const group = new THREE.Group();
-      const core = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.03, 0.03, 1, 6),
-        new THREE.MeshBasicMaterial({ color: '#ffffff', blending: THREE.AdditiveBlending, depthWrite: false }),
-      );
-      const halo = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.09, 0.09, 1, 6),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }),
-      );
-      group.add(halo, core);
-      return group;
-    }
-    if (p.type === 'railgun') {
-      const group = new THREE.Group();
-      const core = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.04, 0.24, 4, 8),
-        new THREE.MeshBasicMaterial({ color: '#ffffff', blending: THREE.AdditiveBlending, depthWrite: false }),
-      );
-      const glow = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.1, 0.3, 4, 8),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }),
-      );
-      group.add(glow, core);
-      return group;
-    }
-    if (p.type === 'machinegun' || p.type === 'aa') {
-      const mesh = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.035, 0.16, 4, 6),
-        new THREE.MeshBasicMaterial({ color: '#fff4cc', blending: THREE.AdditiveBlending, depthWrite: false }),
-      );
-      return mesh;
-    }
-    const radius = p.type === 'coastal' ? 0.15 : p.type === 'flak' ? 0.14 : 0.12;
+    const additive = (c: string, opacity = 0.5) => new THREE.MeshBasicMaterial({
+      color: c, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
     const group = new THREE.Group();
-    const shell = new THREE.Mesh(
-      new THREE.SphereGeometry(radius, 10, 8),
-      new THREE.MeshBasicMaterial({ color }),
-    );
-    const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.6, 8, 6),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.24, blending: THREE.AdditiveBlending, depthWrite: false }),
-    );
-    group.add(halo, shell);
+
+    if (p.type === 'laser' || p.type === 'tesla') {
+      const layers: [number, string, number][] = p.type === 'laser'
+        ? [[0.022, '#ffffff', 1], [0.055, color, 0.8], [0.12, color, 0.3]]
+        : [[0.026, '#ffffff', 1], [0.07, color, 0.75], [0.13, color, 0.35]];
+      layers.forEach(([radius, layerColor, opacity]) => {
+        group.add(new THREE.Mesh(
+          new THREE.CylinderGeometry(radius, radius, 1, 10),
+          additive(layerColor, opacity),
+        ));
+      });
+      return group;
+    }
+
+    if (p.type === 'railgun') {
+      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.26, 4, 10), additive('#ffffff', 1)));
+      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.32, 4, 10), additive(color, 0.5)));
+      [0.08, 0.2].forEach((y) => {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.018, 6, 14), additive(color, 0.75));
+        ring.position.y = y;
+        group.add(ring);
+      });
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.42, 10), additive(color, 0.4));
+      tail.rotation.x = Math.PI;
+      tail.position.y = -0.34;
+      group.add(tail);
+      return group;
+    }
+
+    if (p.type === 'machinegun' || p.type === 'aa') {
+      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.18, 4, 8), additive('#fff8d8', 1)));
+      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.22, 4, 8), additive(color, 0.45)));
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.36, 8), additive(color, 0.35));
+      tail.rotation.x = Math.PI;
+      tail.position.y = -0.28;
+      group.add(tail);
+      return group;
+    }
+
+    const radius = p.type === 'coastal' ? 0.15 : p.type === 'flak' ? 0.14 : 0.12;
+    group.add(new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 9), new THREE.MeshStandardMaterial({
+      color, emissive: new THREE.Color(color), emissiveIntensity: 0.6, metalness: 0.55, roughness: 0.3,
+    })));
+    group.add(new THREE.Mesh(new THREE.SphereGeometry(radius * 1.7, 10, 8), additive(color, 0.28)));
+    group.add(new THREE.Mesh(new THREE.TorusGeometry(radius * 1.25, 0.018, 5, 14), additive('#ffffff', 0.8)));
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.8, 0.46, 9), additive(color, 0.42));
+    tail.rotation.x = Math.PI;
+    tail.position.y = -0.34;
+    group.add(tail);
+    for (let i = 0; i < 4; i++) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.18, radius * 1.4), additive(color, 0.6));
+      fin.rotation.y = (i / 4) * Math.PI * 2;
+      fin.position.y = -0.16;
+      group.add(fin);
+    }
     return group;
   }
 
@@ -1499,7 +1725,8 @@ export class Renderer3D {
         alignYAxis(mesh, p.vx, p.vy);
       } else {
         mesh.position.set(toX(p.x), y, toZ(p.y));
-        mesh.rotation.x += 0.2;
+        alignYAxis(mesh, p.vx, p.vy);
+        mesh.rotateY(this.clock * 12);
       }
     });
   }
@@ -1551,6 +1778,64 @@ export class Renderer3D {
     return group;
   }
 
+  private createFlashEffect(e: Effect): THREE.Group {
+    const group = new THREE.Group();
+    const additive = (color: string, opacity: number) => new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 10), additive('#ffffff', 1));
+    core.userData.baseOpacity = 1;
+    group.add(core);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), additive(e.color, 0.5));
+    halo.userData.baseOpacity = 0.5;
+    group.add(halo);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.95, 6), additive(i % 2 ? e.color : '#ffffff', 0.75));
+      spike.rotation.z = -a;
+      spike.position.set(Math.cos(a) * 0.58, Math.sin(a) * 0.58, 0);
+      spike.userData.baseOpacity = 0.75;
+      group.add(spike);
+    }
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.04, 6, 28), additive(e.color, 0.7));
+    ring.rotation.x = Math.PI / 2;
+    ring.userData.baseOpacity = 0.7;
+    group.add(ring);
+    return group;
+  }
+
+  private createRingEffect(e: Effect): THREE.Group {
+    const group = new THREE.Group();
+    for (let i = 0; i < 3; i++) {
+      const opacity = 0.8 - i * 0.2;
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.76 + i * 0.05, 0.85 + i * 0.05, 44),
+        new THREE.MeshBasicMaterial({
+          color: i === 1 ? '#ffffff' : e.color, transparent: true, opacity,
+          side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
+        }),
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = i * 0.006;
+      ring.userData.delay = i * 0.1;
+      ring.userData.baseOpacity = opacity;
+      group.add(ring);
+    }
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      const sparkMat = new THREE.MeshBasicMaterial({
+        color: e.color, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const spark = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.012, 0.024), sparkMat);
+      spark.position.set(Math.cos(a) * 0.9, 0.014, Math.sin(a) * 0.9);
+      spark.rotation.y = -a;
+      spark.userData.delay = 0.06;
+      spark.userData.baseOpacity = 0.6;
+      group.add(spark);
+    }
+    return group;
+  }
+
   private syncEffects(effects: Effect[]) {
     const alive = new Set(effects);
     [...this.effectMeshes.keys()].forEach((e) => {
@@ -1565,18 +1850,8 @@ export class Renderer3D {
       if (!mesh) {
         if (e.kind === 'beam') mesh = this.createBeamEffect(e);
         else if (e.kind === 'arc') mesh = this.createArcEffect(e);
-        else if (e.kind === 'flash') {
-          mesh = new THREE.Mesh(
-            new THREE.SphereGeometry(1, 12, 8),
-            new THREE.MeshBasicMaterial({ color: e.color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }),
-          );
-        } else {
-          mesh = new THREE.Mesh(
-            new THREE.RingGeometry(0.82, 1, 28),
-            new THREE.MeshBasicMaterial({ color: e.color, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false }),
-          );
-          mesh.rotation.x = -Math.PI / 2;
-        }
+        else if (e.kind === 'flash') mesh = this.createFlashEffect(e);
+        else mesh = this.createRingEffect(e);
         this.effectMeshes.set(e, mesh);
         this.fxGroup.add(mesh);
       }
@@ -1604,15 +1879,47 @@ export class Renderer3D {
       } else if (e.kind === 'flash') {
         const r = Math.max(0.05, (e.r + (e.maxR - e.r) * k) / TILE * 0.5);
         mesh.position.set(toX(e.x), e.z, toZ(e.y));
-        mesh.scale.setScalar(r * (0.4 + k * 0.6));
-        (mesh as THREE.Mesh).material && (((mesh as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k));
+        mesh.scale.setScalar(r * (0.5 + k * 0.7));
+        mesh.rotation.y = k * 0.6;
+        mesh.traverse((child) => {
+          const m = (child as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+          const base = child.userData.baseOpacity as number | undefined;
+          if (m && base !== undefined) m.opacity = base * (1 - k) * (1 - k * 0.25);
+        });
       } else {
         const r = (e.r + (e.maxR - e.r) * k) / TILE;
         mesh.position.set(toX(e.x), 0.09, toZ(e.y));
         mesh.scale.setScalar(Math.max(0.05, r));
-        ((mesh as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - k);
+        mesh.rotation.y = k * 0.4;
+        mesh.traverse((child) => {
+          const delay = (child.userData.delay as number | undefined) ?? 0;
+          const kk = Math.max(0, (k - delay) / (1 - delay));
+          const m = (child as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+          const base = child.userData.baseOpacity as number | undefined;
+          if (m && base !== undefined) m.opacity = base * (1 - kk);
+          child.scale.setScalar(1 + kk * 0.14);
+        });
       }
     });
+  }
+
+  private createSmokeMesh(p: Particle): THREE.Object3D {
+    const group = new THREE.Group();
+    const blobs = 5;
+    for (let i = 0; i < blobs; i++) {
+      const a = (i / blobs) * Math.PI * 2 + Math.random() * 0.7;
+      const dist = 0.28 + Math.random() * 0.42;
+      const s = 0.45 + Math.random() * 0.45;
+      const blob = new THREE.Mesh(
+        new THREE.SphereGeometry(1, 7, 5),
+        new THREE.MeshBasicMaterial({ color: p.color, transparent: true, opacity: 0.5, depthWrite: false }),
+      );
+      blob.position.set(Math.cos(a) * dist, (Math.random() - 0.5) * 0.35, Math.sin(a) * dist);
+      blob.scale.set(s, s * (0.7 + Math.random() * 0.5), s);
+      blob.userData.baseOpacity = 0.34 + Math.random() * 0.18;
+      group.add(blob);
+    }
+    return group;
   }
 
   private syncParticles(particles: Particle[]) {
@@ -1627,17 +1934,28 @@ export class Renderer3D {
     particles.forEach((p) => {
       let mesh = this.particleMeshes.get(p);
       if (!mesh) {
-        mesh = new THREE.Mesh(
-          new THREE.SphereGeometry(1, 6, 4),
-          new THREE.MeshBasicMaterial({ color: p.color, transparent: true, depthWrite: false }),
-        );
+        mesh = p.smoke
+          ? this.createSmokeMesh(p)
+          : new THREE.Mesh(
+            new THREE.SphereGeometry(1, 6, 4),
+            new THREE.MeshBasicMaterial({ color: p.color, transparent: true, depthWrite: false }),
+          );
         this.particleMeshes.set(p, mesh);
         this.fxGroup.add(mesh);
       }
       const k = Math.max(0, p.life / p.maxLife);
       mesh.position.set(toX(p.x), p.z, toZ(p.y));
-      mesh.scale.setScalar(p.size * k);
-      (mesh.material as THREE.MeshBasicMaterial).opacity = k;
+      if (p.smoke) {
+        mesh.scale.setScalar(p.size * (1 + (1 - k) * 0.5));
+        mesh.traverse((child) => {
+          const m = (child as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+          const base = child.userData.baseOpacity as number | undefined;
+          if (m && base !== undefined) m.opacity = base * k * k;
+        });
+      } else {
+        mesh.scale.setScalar(p.size * k);
+        ((mesh as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = k;
+      }
     });
   }
 

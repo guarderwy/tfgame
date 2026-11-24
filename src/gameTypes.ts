@@ -21,6 +21,7 @@ export interface Tower {
   totalCost: number;
   angle: number;
   initialized?: boolean;
+  refillAll?: boolean;
 }
 
 export interface Enemy {
@@ -39,6 +40,9 @@ export interface Enemy {
   footprint: number;
   color: string;
   boss: boolean;
+  ability?: 'dash' | 'regen';
+  dashTimer?: number;
+  dashActive?: number;
   path: PathData;
   index: number;
   traveled: number;
@@ -107,6 +111,7 @@ export interface Particle {
   maxLife: number;
   color: string;
   size: number;
+  smoke?: boolean;
 }
 
 export interface SpawnTask {
