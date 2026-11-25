@@ -40,6 +40,8 @@ export class AudioKit {
   private musicStep = 0;
   private nextNoteTime = 0;
   private currentTrack = -1;
+  private ambience: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  private lastHitAt = 0;
   muted = false;
   musicMuted = false;
   private disposed = false;
@@ -66,6 +68,37 @@ export class AudioKit {
     const wasSuspended = !this.ctx || this.ctx.state === 'suspended';
     this.ensure();
     if (wasSuspended && this.currentTrack >= 0) this.playMusic(this.currentTrack);
+  }
+
+  private startAmbience() {
+    const ctx = this.ensure();
+    if (!ctx || !this.sfxBus || this.ambience) return;
+    const len = Math.floor(ctx.sampleRate * 2);
+    const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 240;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.055;
+    src.connect(filter).connect(gain).connect(this.sfxBus);
+    src.start();
+    this.ambience = { src, gain };
+  }
+
+  private connectSfx(node: AudioNode, pan: number) {
+    if (!this.ctx || !this.sfxBus) return;
+    if (pan !== 0) {
+      const panner = this.ctx.createStereoPanner();
+      panner.pan.value = Math.max(-0.9, Math.min(0.9, pan));
+      node.connect(panner).connect(this.sfxBus);
+    } else {
+      node.connect(this.sfxBus);
+    }
   }
 
   private musicNote(freq: number, dur: number, type: OscillatorType, gain: number, at: number) {
@@ -108,6 +141,7 @@ export class AudioKit {
     if (this.musicTimer !== null) window.clearInterval(this.musicTimer);
     this.musicTimer = window.setInterval(() => this.scheduleMusic(), 25);
     this.scheduleMusic();
+    this.startAmbience();
   }
 
   stopMusic() {
@@ -121,6 +155,10 @@ export class AudioKit {
 
   dispose() {
     this.stopMusic();
+    if (this.ambience) {
+      try { this.ambience.src.stop(); } catch { /* 已停止 */ }
+      this.ambience = null;
+    }
     this.disposed = true;
     if (this.ctx) void this.ctx.close();
     this.ctx = null;
@@ -144,7 +182,7 @@ export class AudioKit {
     }
   }
 
-  private tone(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number) {
+  private tone(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number, pan = 0) {
     if (this.muted) return;
     const ctx = this.ensure();
     if (!ctx || !this.sfxBus) return;
@@ -156,12 +194,13 @@ export class AudioKit {
     if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t + dur);
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    osc.connect(g).connect(this.sfxBus);
+    osc.connect(g);
+    this.connectSfx(g, pan);
     osc.start(t);
     osc.stop(t + dur + 0.02);
   }
 
-  private noise(dur: number, gain: number, cutoff: number, sweepTo?: number) {
+  private noise(dur: number, gain: number, cutoff: number, sweepTo?: number, pan = 0) {
     if (this.muted) return;
     const ctx = this.ensure();
     if (!ctx || !this.sfxBus) return;
@@ -179,7 +218,8 @@ export class AudioKit {
     const g = ctx.createGain();
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(filter).connect(g).connect(this.sfxBus);
+    src.connect(filter).connect(g);
+    this.connectSfx(g, pan);
     src.start(t);
     src.stop(t + dur + 0.02);
   }
@@ -195,22 +235,30 @@ export class AudioKit {
     this.tone(840, 0.18, 'triangle', 0.1);
   }
 
-  fire(type: TowerType) {
+  fire(type: TowerType, pan = 0) {
     if (type === 'machinegun' || type === 'aa') {
-      this.noise(0.06, 0.12, 2600, 900);
-      this.tone(180, 0.05, 'square', 0.06, 90);
+      this.noise(0.06, 0.12, 2600, 900, pan);
+      this.tone(180, 0.05, 'square', 0.06, 90, pan);
     } else if (type === 'howitzer') {
-      this.noise(0.22, 0.28, 1200, 180);
-      this.tone(90, 0.2, 'sine', 0.16, 45);
+      this.noise(0.22, 0.28, 1200, 180, pan);
+      this.tone(90, 0.2, 'sine', 0.16, 45, pan);
     } else {
-      this.noise(0.16, 0.24, 1500, 240);
-      this.tone(110, 0.16, 'sine', 0.14, 55);
+      this.noise(0.16, 0.24, 1500, 240, pan);
+      this.tone(110, 0.16, 'sine', 0.14, 55, pan);
     }
   }
 
-  explode(big = false) {
-    this.noise(big ? 0.42 : 0.24, big ? 0.34 : 0.2, big ? 900 : 1400, 90);
-    this.tone(big ? 70 : 100, big ? 0.32 : 0.18, 'sine', 0.12, 40);
+  explode(big = false, pan = 0) {
+    this.noise(big ? 0.42 : 0.24, big ? 0.34 : 0.2, big ? 900 : 1400, 90, pan);
+    this.tone(big ? 70 : 100, big ? 0.32 : 0.18, 'sine', 0.12, 40, pan);
+  }
+
+  hit(pan = 0) {
+    const ctx = this.ensure();
+    if (!ctx || this.muted || ctx.currentTime - this.lastHitAt < 0.045) return;
+    this.lastHitAt = ctx.currentTime;
+    this.noise(0.045, 0.07, 3200, 1200, pan);
+    this.tone(760, 0.05, 'triangle', 0.045, 380, pan);
   }
 
   leak() {

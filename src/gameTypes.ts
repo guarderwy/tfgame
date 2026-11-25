@@ -22,6 +22,7 @@ export interface Tower {
   angle: number;
   initialized?: boolean;
   refillAll?: boolean;
+  recoil?: number;
 }
 
 export interface Enemy {
@@ -48,6 +49,7 @@ export interface Enemy {
   traveled: number;
   angle: number;
   dead: boolean;
+  lastFloat?: number;
 }
 
 export interface Projectile {
