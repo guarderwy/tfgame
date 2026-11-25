@@ -87,7 +87,7 @@ export const SELL_REFUND = 0.6;
 export const MAX_LEVEL = 3;
 
 // 跨关难度曲线：敌人生命/赏金随关卡线性放大（第 20 关约 1.86 倍），
-// 与初始金币（约每关 +30~60）和波次数量增长共同构成整体难度递进
+// 与初始金币（260 起步、约每关 +22）和波次数量增长共同构成整体难度递进
 export function difficultyScale(levelId: number) {
   return 1 + (levelId - 1) * 0.045;
 }
