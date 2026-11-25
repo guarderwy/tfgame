@@ -200,7 +200,7 @@ export const LEVELS: LevelDef[] = [
   },
   {
     id: 9, name: '要塞外围', desc: '石砌要塞迷宫，首领级单位压轴登场。', gold: 420, lives: 24,
-    theme: theme({ ground: '#413b33', path: '#806e4c', water: '#1e5b72', sky: '#26221d', fog: '#26221d', deco: 'ruins', ambient: 0.95, sun: 1.1 }),
+    theme: theme({ ground: '#413b33', path: '#806e4c', water: '#1e5b72', sky: '#26221d', fog: '#26221d', deco: 'ruins', ambient: 0.95, sun: 1.1, weather: 'fog' }),
     ground: [[[0,6],[3,6],[3,2],[7,2],[7,11],[12,11],[12,3],[16,3],[16,12],[20,12],[20,5],[22,5],[22,7]]],
     water: [[[0,13],[9,13],[9,10],[15,10],[15,13],[20,13],[20,12],[22,12],[22,13]]],
     waves: wavesFor(9),

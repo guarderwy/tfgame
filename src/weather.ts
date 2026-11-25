@@ -9,10 +9,13 @@ import type { DecoKind, LevelTheme, WeatherKind } from './types';
 //      淡入 → 保持一个完整周期 → 淡出归零 → 再次随机延时，循环往复
 //   3. 各阶段均为权重渐变（雾色/雾距/光照/粒子透明度同步插值），过渡自然流畅
 //   4. 每帧仅 1~2 个 draw call（Points / LineSegments），无阴影参与，性能平稳
-//   5. 沙漠风沙按随机间隔触发"阵风"，强度平滑包络，雾与能见度随之起伏
+//   5. 沙漠风沙 = 三档颗粒分层（细尘帷幕 / 粗砂贴地 / 前景飞沙）+ 随机阵风包络：
+//      无风期维持基础沙霾，阵风期浓度、颗粒色、雾色、场景受光同步向铁锈色加深，
+//      形成从"扬灰"到"遮天蔽日"的浓度与色调双重演进
 //   6. 雷暴复用雨系统加重雨势，闪电为多脉冲包络，同步驱动雾色/光照/曝光与雷声
 //   7. 萤火虫用顶点色逐粒明灭 + AdditiveBlending，配合 bloom 呈现夜光效果
-//   8. 浓雾零粒子成本，仅调雾参数即可实现玩法联动（遮蔽视野）的基础
+//   8. 浓雾 = 厚重雾距 + 多层大型雾团：缓慢漂移、明暗呼吸、雾距起伏，
+//      呈现真实浓雾的流动感；零额外模型，仍是每层一个 draw call
 // ─────────────────────────────────────────────────────────────────────────────
 
 // 粒子活动范围（世界坐标，略大于战场，保证任意镜头角度都有粒子）
@@ -44,11 +47,17 @@ const ATMOS: Record<WeatherKind, AtmospherePreset> = {
   thunderstorm: { fogColor: '#232c34', fogNear: 16, fogFar: 44, hemiMul: 0.7,  sunMul: 0.45 },
   sandstorm:    { fogColor: '#a8804a', fogNear: 12, fogFar: 46, hemiMul: 1.15, sunMul: 0.9 },
   fireflies:    { fogColor: '#0d141c', fogNear: 22, fogFar: 55, hemiMul: 0.85, sunMul: 0.65 },
-  fog:          { fogColor: '#57615c', fogNear: 9,  fogFar: 38, hemiMul: 0.9,  sunMul: 0.8 },
+  fog:          { fogColor: '#59635d', fogNear: 7,  fogFar: 34, hemiMul: 0.85, sunMul: 0.7 },
 };
 
 // 闪电雾色（雷暴时雾被照亮）
 const FLASH_FOG = '#c9d6e6';
+
+// 风沙雾色演进：平静期干热土黄 → 阵风峰值浓重铁锈色（光线被沙尘吞噬）
+const SAND_FOG_STORM = '#6e4a2a';
+// 场景固有色浸染目标：风沙期环境光/阳光整体被暖沙色污染
+const SAND_TINT_HEMI = '#c39a6b';
+const SAND_TINT_SUN = '#e8b070';
 
 // 关卡装饰类型 → 天气场景映射；未命中则进入自动轮换
 function weatherFromDeco(deco: DecoKind): WeatherKind | null {
@@ -97,7 +106,7 @@ interface RainSystem {
   count: number;
 }
 
-interface SandSystem {
+interface SandLayer {
   points: THREE.Points;
   mat: THREE.PointsMaterial;
   pos: Float32Array;
@@ -105,7 +114,22 @@ interface SandSystem {
   freq: Float32Array;
   height: Float32Array;
   speedMul: Float32Array;
+  baseBright: Float32Array; // 每粒基础亮度差异
+  colors: Float32Array;     // 顶点色（亮度差异 + 阵风闪烁）
+  yMin: number;
+  restOpacity: number;      // 无风期基础浓度（沙霾帷幕）
+  gustOpacity: number;      // 阵风附加浓度
+  restSpeed: number;        // 无风期风速基数
+  gustSpeed: number;        // 阵风附加风速
+  sizeBase: number;
+  colorCalm: string;        // 平静期颗粒色（干热浅土黄）
+  colorStorm: string;       // 峰值颗粒色（浓重铁锈色）
+  flicker: boolean;         // 是否逐帧更新闪烁（粗砂/飞沙）
   count: number;
+}
+
+interface SandSystem {
+  layers: SandLayer[];
 }
 
 interface FireflySystem {
@@ -118,6 +142,22 @@ interface FireflySystem {
   count: number;
 }
 
+interface FogBankLayer {
+  points: THREE.Points;
+  mat: THREE.PointsMaterial;
+  pos: Float32Array;
+  seed: Float32Array;
+  baseY: Float32Array;
+  speed: number;       // 漂移速度倍率
+  baseOpacity: number;
+  phase: number;       // 呼吸/漂移相位
+  count: number;
+}
+
+interface FogBankSystem {
+  layers: FogBankLayer[];
+}
+
 export class WeatherSystem {
   private readonly group = new THREE.Group();
   private readonly spriteTex = softSprite();
@@ -126,6 +166,7 @@ export class WeatherSystem {
   private rain: RainSystem;
   private sand: SandSystem;
   private fireflies: FireflySystem;
+  private fogBanks: FogBankSystem;
 
   // 场景生命周期：idle（无天气）→ in（淡入）→ hold（完整周期）→ out（淡出）→ idle
   private phase: 'idle' | 'in' | 'hold' | 'out' = 'idle';
@@ -154,8 +195,11 @@ export class WeatherSystem {
   private baseFogFar = 68;
   private baseHemi = 1;
   private baseSun = 1;
+  private baseHemiColor = new THREE.Color('#cfe0b8');
+  private baseSunColor = new THREE.Color('#ffe9c4');
   private baseExposure: number;
   private tmpColor = new THREE.Color();
+  private tmpColor2 = new THREE.Color();
 
   constructor(
     private scene: THREE.Scene,
@@ -169,6 +213,7 @@ export class WeatherSystem {
     this.rain = this.buildRain();
     this.sand = this.buildSand();
     this.fireflies = this.buildFireflies();
+    this.fogBanks = this.buildFogBanks();
     scene.add(this.group);
   }
 
@@ -235,37 +280,75 @@ export class WeatherSystem {
   }
 
   private buildSand(): SandSystem {
-    const count = 1300;
-    const pos = new Float32Array(count * 3);
-    const phase = new Float32Array(count);
-    const freq = new Float32Array(count);
-    const height = new Float32Array(count);
-    const speedMul = new Float32Array(count);
-    for (let i = 0; i < count; i++) {
-      pos[i * 3] = (Math.random() * 2 - 1) * FIELD.x;
-      pos[i * 3 + 1] = 0.2 + Math.random() * 1.4;
-      pos[i * 3 + 2] = (Math.random() * 2 - 1) * FIELD.z;
-      phase[i] = Math.random() * Math.PI * 2;
-      freq[i] = 1.2 + Math.random() * 2.4;
-      height[i] = 0.25 + Math.random() * 1.5;    // 贴地翻滚的沙尘
-      speedMul[i] = 0.8 + Math.random() * 0.5;
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const mat = new THREE.PointsMaterial({
-      size: 0.12,
-      map: this.spriteTex,
-      color: '#c9a061',
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      sizeAttenuation: true,
+    // 三档颗粒分层，构成贴地浓、向上稀的沙暴剖面：
+    //   细尘——高空的半透明沙霾帷幕，无风期也在，撑起"身在沙暴里"的底色
+    //   粗砂——贴地翻滚的主体沙流，阵风时浓度暴涨，是视觉冲击的主力
+    //   飞沙——稀少的大颗粒快速掠过近景，抽打感来自"一闪而过"
+    const layerDefs = [
+      {
+        count: 900, size: 0.08, yMin: 1.2, ySpan: 7,
+        restOpacity: 0.22, gustOpacity: 0.42, restSpeed: 1.4, gustSpeed: 6.5,
+        colorCalm: '#d4b276', colorStorm: '#a87c48', flicker: false,
+      },
+      {
+        count: 480, size: 0.16, yMin: 0.15, ySpan: 2,
+        restOpacity: 0.08, gustOpacity: 0.6, restSpeed: 2, gustSpeed: 9.5,
+        colorCalm: '#c9a761', colorStorm: '#8f6a3d', flicker: true,
+      },
+      {
+        count: 200, size: 0.3, yMin: 0.1, ySpan: 1.3,
+        restOpacity: 0, gustOpacity: 0.5, restSpeed: 3.2, gustSpeed: 11,
+        colorCalm: '#d8b878', colorStorm: '#9a7442', flicker: true,
+      },
+    ];
+    const layers = layerDefs.map((def) => {
+      const pos = new Float32Array(def.count * 3);
+      const phase = new Float32Array(def.count);
+      const freq = new Float32Array(def.count);
+      const height = new Float32Array(def.count);
+      const speedMul = new Float32Array(def.count);
+      const baseBright = new Float32Array(def.count);
+      const colors = new Float32Array(def.count * 3);
+      for (let i = 0; i < def.count; i++) {
+        pos[i * 3] = (Math.random() * 2 - 1) * FIELD.x;
+        pos[i * 3 + 1] = def.yMin + Math.random() * def.ySpan;
+        pos[i * 3 + 2] = (Math.random() * 2 - 1) * FIELD.z;
+        phase[i] = Math.random() * Math.PI * 2;
+        freq[i] = 1.2 + Math.random() * 2.4;
+        height[i] = 0.2 + Math.random() * def.ySpan;   // 上下起伏幅度
+        speedMul[i] = 0.8 + Math.random() * 0.5;
+        baseBright[i] = 0.75 + Math.random() * 0.35;   // 静态明暗差异打破均匀感
+        colors[i * 3] = baseBright[i];
+        colors[i * 3 + 1] = baseBright[i];
+        colors[i * 3 + 2] = baseBright[i];
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      const mat = new THREE.PointsMaterial({
+        size: def.size,
+        map: this.spriteTex,
+        color: def.colorCalm,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        sizeAttenuation: true,
+      });
+      const points = new THREE.Points(geo, mat);
+      points.frustumCulled = false;
+      points.visible = false;
+      this.group.add(points);
+      return {
+        points, mat, pos, phase, freq, height, speedMul, baseBright, colors,
+        yMin: def.yMin,
+        restOpacity: def.restOpacity, gustOpacity: def.gustOpacity,
+        restSpeed: def.restSpeed, gustSpeed: def.gustSpeed,
+        sizeBase: def.size, colorCalm: def.colorCalm, colorStorm: def.colorStorm,
+        flicker: def.flicker, count: def.count,
+      };
     });
-    const points = new THREE.Points(geo, mat);
-    points.frustumCulled = false;
-    points.visible = false;
-    this.group.add(points);
-    return { points, mat, pos, phase, freq, height, speedMul, count };
+    return { layers };
   }
 
   private buildFireflies(): FireflySystem {
@@ -301,6 +384,44 @@ export class WeatherSystem {
     return { points, mat, pos, colors, phase, freq, count };
   }
 
+  private buildFogBanks(): FogBankSystem {
+    // 三层雾团：由近及远、由小到大，层间速度与呼吸节奏错开形成纵深流动感
+    const layerDefs = [
+      { count: 10, size: 5.5, speed: 0.35, baseOpacity: 0.2, yMin: 0.5, yMax: 1.6 },
+      { count: 7, size: 9, speed: 0.55, baseOpacity: 0.16, yMin: 0.8, yMax: 2.4 },
+      { count: 5, size: 13, speed: 0.78, baseOpacity: 0.13, yMin: 1.2, yMax: 3.2 },
+    ];
+    const layers = layerDefs.map((def, li) => {
+      const pos = new Float32Array(def.count * 3);
+      const seed = new Float32Array(def.count);
+      const baseY = new Float32Array(def.count);
+      for (let i = 0; i < def.count; i++) {
+        pos[i * 3] = (Math.random() * 2 - 1) * (FIELD.x + 2);
+        pos[i * 3 + 1] = def.yMin + Math.random() * (def.yMax - def.yMin);
+        pos[i * 3 + 2] = (Math.random() * 2 - 1) * (FIELD.z + 2);
+        seed[i] = Math.random() * Math.PI * 2;
+        baseY[i] = pos[i * 3 + 1];
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const mat = new THREE.PointsMaterial({
+        size: def.size,
+        map: this.spriteTex,
+        color: '#88948e',
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        sizeAttenuation: true,
+      });
+      const points = new THREE.Points(geo, mat);
+      points.frustumCulled = false;
+      points.visible = false;
+      this.group.add(points);
+      return { points, mat, pos, seed, baseY, speed: def.speed, baseOpacity: def.baseOpacity, phase: li * 2.1 + Math.random(), count: def.count };
+    });
+    return { layers };
+  }
+
   // ── 对外接口 ──────────────────────────────────────────────────────────────
 
   /** 注入雷声回调（闪电触发时调用，与画面闪光同步） */
@@ -318,6 +439,8 @@ export class WeatherSystem {
     }
     this.baseHemi = theme.ambient;
     this.baseSun = theme.sun;
+    this.baseHemiColor.copy(this.hemi.color);
+    this.baseSunColor.copy(this.sun.color);
 
     // 优先级：显式 weather 字段 > 装饰类型映射 > 夜间关卡 → 萤火虫之夜
     // 场景内容按主题锁定，但触发时机仍是随机的（进入关卡先无天气）
@@ -361,12 +484,13 @@ export class WeatherSystem {
     this.stepRain(rainW + thunderW, thunderW, dt);
     this.stepSand(this.weightOf('sandstorm'), dt);
     this.stepFireflies(this.weightOf('fireflies'), dt);
+    this.stepFogBanks(this.weightOf('fog'), dt);
     this.applyAtmosphere();
   }
 
   dispose() {
     this.scene.remove(this.group);
-    [this.snow.points, this.rain.lines, this.sand.points, this.fireflies.points].forEach((obj) => {
+    [...this.fogBanks.layers.map((l) => l.points), this.snow.points, this.rain.lines, ...this.sand.layers.map((l) => l.points), this.fireflies.points].forEach((obj) => {
       obj.geometry.dispose();
       (obj.material as THREE.Material).dispose();
     });
@@ -501,20 +625,34 @@ export class WeatherSystem {
   }
 
   private stepSand(w: number, dt: number) {
-    const s = this.sand;
-    s.points.visible = w > 0;
-    s.mat.opacity = (0.16 + this.gust * 0.55) * w;
-    s.mat.size = 0.1 + this.gust * 0.08; // 阵风时沙粒更粗更密
-    if (w <= 0) return;
-    const pos = s.pos;
-    const windSpeed = 1.6 + this.gust * 10; // 阵风驱动水平风速
-    for (let i = 0; i < s.count; i++) {
-      const o = i * 3;
-      pos[o] = wrap(pos[o] - windSpeed * s.speedMul[i] * dt, FIELD.x);
-      pos[o + 1] = 0.15 + (Math.sin(this.time * s.freq[i] + s.phase[i]) * 0.5 + 0.5) * s.height[i];
-      pos[o + 2] = wrap(pos[o + 2] + (0.35 + Math.sin(this.time * 0.6 + s.phase[i]) * 0.4) * dt, FIELD.z);
+    for (const layer of this.sand.layers) {
+      layer.points.visible = w > 0;
+      // 浓度演进：无风期维持基础沙霾，阵风期暴涨；细尘层永远在场，粗砂/飞沙负责冲击
+      layer.mat.opacity = (layer.restOpacity + this.gust * layer.gustOpacity) * w;
+      if (w <= 0) continue;
+      // 速度分层：贴地粗砂/飞沙快、高空细尘慢，形成剪切感
+      const wind = layer.restSpeed + this.gust * layer.gustSpeed;
+      const pos = layer.pos;
+      for (let i = 0; i < layer.count; i++) {
+        const o = i * 3;
+        pos[o] = wrap(pos[o] - wind * layer.speedMul[i] * dt, FIELD.x);
+        pos[o + 1] = layer.yMin + (Math.sin(this.time * layer.freq[i] + layer.phase[i]) * 0.5 + 0.5) * layer.height[i];
+        pos[o + 2] = wrap(pos[o + 2] + (0.35 + Math.sin(this.time * 0.6 + layer.phase[i]) * 0.4) * dt, FIELD.z);
+        // 闪烁：模拟沙粒翻滚时的受光/背光变化（细尘层静态明暗即可，节省更新）
+        if (layer.flicker) {
+          const glint = layer.baseBright[i] * (0.68 + 0.32 * Math.sin(this.time * layer.freq[i] * 3 + layer.phase[i] * 2));
+          layer.colors[o] = glint;
+          layer.colors[o + 1] = glint;
+          layer.colors[o + 2] = glint;
+        }
+      }
+      (layer.points.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      if (layer.flicker) {
+        (layer.points.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+      }
+      // 颗粒色调随阵风由干热浅土黄加深为铁锈色，是沙暴强度的直观"仪表盘"
+      layer.mat.color.set(layer.colorCalm).lerp(this.tmpColor.set(layer.colorStorm), this.gust * 0.85);
     }
-    (s.points.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
   }
 
   private stepFireflies(w: number, dt: number) {
@@ -540,6 +678,26 @@ export class WeatherSystem {
     }
     (f.points.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
     (f.points.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  private stepFogBanks(w: number, dt: number) {
+    for (const layer of this.fogBanks.layers) {
+      layer.points.visible = w > 0;
+      // 明暗呼吸：各层相位错开，雾团像在缓慢翻涌而非静止贴图
+      layer.mat.opacity = layer.baseOpacity * w * (0.72 + 0.28 * Math.sin(this.time * 0.22 + layer.phase * 3));
+      if (w <= 0) return;
+      const pos = layer.pos;
+      // 主漂移：缓慢风向 + 层速，叠加微弱的蛇形摆动，流动更自然
+      const driftX = layer.speed * (0.6 + 0.4 * Math.sin(this.time * 0.11 + layer.phase));
+      for (let i = 0; i < layer.count; i++) {
+        const o = i * 3;
+        pos[o] = wrap(pos[o] + (driftX + Math.sin(this.time * 0.05 + layer.seed[i]) * 0.12) * dt, FIELD.x + 4);
+        // 缓慢起伏：雾团在贴地与半空之间游移
+        pos[o + 1] = layer.baseY[i] + Math.sin(this.time * 0.15 + layer.seed[i]) * 0.5;
+        pos[o + 2] = wrap(pos[o + 2] + Math.cos(this.time * 0.06 + layer.seed[i] * 2) * 0.14 * dt, FIELD.z + 3);
+      }
+      (layer.points.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    }
   }
 
   private updateFlash(dt: number) {
@@ -596,10 +754,19 @@ export class WeatherSystem {
 
     if (kind && w > 0) {
       const p = ATMOS[kind];
-      const ws = w * (kind === 'sandstorm' ? 0.45 + 0.55 * this.gust : 1);
-      fog.color.lerp(this.tmpColor.set(p.fogColor), ws * 0.8);
+      // 风沙：阵风权重影响更大，且雾色由土黄向铁锈色演进（色调即强度仪表盘）
+      const gustScale = kind === 'sandstorm' ? 0.35 + 0.65 * this.gust : 1;
+      const ws = w * gustScale;
+      if (kind === 'sandstorm') {
+        this.tmpColor.set(p.fogColor).lerp(this.tmpColor2.set(SAND_FOG_STORM), this.gust * 0.85);
+      } else {
+        this.tmpColor.set(p.fogColor);
+      }
+      fog.color.lerp(this.tmpColor, ws * 0.8);
       near += (p.fogNear - near) * ws;
       far += (p.fogFar - far) * ws;
+      // 浓雾能见度缓慢起伏：雾气在聚散之间流动
+      if (kind === 'fog') far += Math.sin(this.time * 0.16) * 2.5 * w;
       hemiMul += (p.hemiMul - 1) * w;
       sunMul += (p.sunMul - 1) * w;
     }
@@ -608,6 +775,12 @@ export class WeatherSystem {
     fog.far = far;
     this.hemi.intensity = this.baseHemi * hemiMul;
     this.sun.intensity = this.baseSun * sunMul;
+
+    // 沙色浸染：风沙期场景环境光/阳光被暖沙色污染，炮台地面整体向暖褐偏移，
+    // 阵风峰值最强、沙退后随权重归零还原主题固有色
+    const pollute = kind === 'sandstorm' ? w * this.gust : 0;
+    this.hemi.color.copy(this.baseHemiColor).lerp(this.tmpColor.set(SAND_TINT_HEMI), pollute * 0.55);
+    this.sun.color.copy(this.baseSunColor).lerp(this.tmpColor.set(SAND_TINT_SUN), pollute * 0.5);
 
     // 闪电：雾色与光照瞬间被照亮，曝光同步抬升，脉冲结束快速回落
     const flash = this.flashIntensity();
