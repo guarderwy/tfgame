@@ -105,6 +105,10 @@ export class Game {
   private id = 0;
   private lastTime = 0;
   private bannerTimer = 0;
+  private rafId = 0;
+  private killCombo = 0;
+  private lastKillTime = 0;
+  private lastGold = -1;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -120,12 +124,16 @@ export class Game {
     this.bindEvents();
     this.loadLevel(1);
     this.lastTime = performance.now();
-    requestAnimationFrame(this.loop);
+    this.rafId = requestAnimationFrame(this.loop);
     window.addEventListener('pagehide', this.destroy);
     window.addEventListener('beforeunload', this.destroy);
   }
 
   destroy = () => {
+    cancelAnimationFrame(this.rafId);
+    window.removeEventListener('pagehide', this.destroy);
+    window.removeEventListener('beforeunload', this.destroy);
+    this.view.destroy();
     this.audio.dispose();
   };
 
@@ -225,8 +233,6 @@ export class Game {
     document.querySelectorAll<HTMLElement>('.build-panel .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     $('tab-build').classList.toggle('hidden', name !== 'build');
     $('tab-codex').classList.toggle('hidden', name !== 'codex');
-    $('btn-deploy').classList.toggle('active', name === 'build');
-    $('btn-codex').classList.toggle('active', name === 'codex');
   }
 
   private setInfoIcon(type: string, color: string, kind: string) {
@@ -271,12 +277,6 @@ export class Game {
   }
 
   private bindModals() {
-    const jumpToPanel = (tab: 'build' | 'codex') => {
-      this.showTab(tab);
-      document.querySelector('.build-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    };
-    $('btn-deploy').addEventListener('click', () => jumpToPanel('build'));
-    $('btn-codex').addEventListener('click', () => jumpToPanel('codex'));
     document.querySelectorAll<HTMLElement>('[data-close]').forEach((el) => {
       el.addEventListener('click', () => this.closeModal(el.dataset.close as string));
     });
@@ -490,6 +490,9 @@ export class Game {
     this.buildType = null;
     this.countdown = 0;
     this.paused = false;
+    this.lastGold = -1;
+    this.killCombo = 0;
+    $('fx-layer').replaceChildren();
     $('btn-pause').textContent = '暂停';
     $('btn-pause').classList.remove('active');
     ($('level-select') as HTMLSelectElement).value = String(lv.id);
@@ -574,6 +577,34 @@ export class Game {
     this.bannerTimer = 1.2;
   }
 
+  private panOf(x: number) {
+    return (x / WIDTH) * 1.6 - 0.8;
+  }
+
+  private floatText(x: number, y: number, z: number, text: string, color: string, big = false) {
+    const pos = this.view.worldToScreen(x, y, z);
+    if (!pos) return;
+    const layer = $('fx-layer');
+    if (layer.childElementCount > 28) layer.firstElementChild?.remove();
+    const el = document.createElement('span');
+    el.className = big ? 'float-dmg big' : 'float-dmg';
+    el.textContent = text;
+    el.style.color = color;
+    el.style.left = `${pos.x}px`;
+    el.style.top = `${pos.y}px`;
+    layer.appendChild(el);
+    window.setTimeout(() => el.remove(), 760);
+  }
+
+  private showCombo(count: number) {
+    const layer = $('fx-layer');
+    const el = document.createElement('span');
+    el.className = 'combo-toast';
+    el.innerHTML = `<strong>${count}</strong><span>连杀</span>`;
+    layer.appendChild(el);
+    window.setTimeout(() => el.remove(), 900);
+  }
+
   private startWave(manual: boolean) {
     if (this.status === 'wave' || this.status === 'won' || this.status === 'lost') return;
     if (manual && this.status === 'cleared') { this.gold += 12; this.flash('提前出击 +12 金币'); }
@@ -603,12 +634,11 @@ export class Game {
       path = makeAirPath();
     }
     if (!path) return;
-    const swarmHp = group.boss ? 1 : 0.9;
-    const hp = cfg.hp * group.hpScale * difficultyScale(this.level.id) * swarmHp;
+    const hp = cfg.hp * group.hpScale * difficultyScale(this.level.id);
     this.enemies.push({
       id: ++this.id, type: group.type, kind: cfg.kind, x: path.points[0].x, y: path.points[0].y,
       hp, maxHp: hp, armor: cfg.armor, speed: cfg.speed,
-      bounty: Math.round(cfg.bounty * (0.7 + 0.28 * Math.sqrt(Math.max(0, group.hpScale * difficultyScale(this.level.id) - 1))) * swarmHp),
+      bounty: Math.round(cfg.bounty * (0.7 + 0.28 * Math.sqrt(Math.max(0, group.hpScale * difficultyScale(this.level.id) - 1)))),
       damage: cfg.damage, size: cfg.size * (group.boss ? 1.5 : 1),
       footprint: (cfg.footprint ?? cfg.size * 2) * (group.boss ? 1.3 : 1),
       color: cfg.color, boss: !!group.boss,
@@ -701,6 +731,7 @@ export class Game {
     const d = Math.hypot(dx, dy) || 1;
     const speed = cfg.projectileSpeed;
     t.angle = Math.atan2(dy, dx);
+    t.recoil = 1;
     const edgeX = dx > 0 ? (WIDTH - t.x) * d / dx : dx < 0 ? -t.x * d / dx : Infinity;
     const edgeY = dy > 0 ? (HEIGHT - t.y) * d / dy : dy < 0 ? -t.y * d / dy : Infinity;
     const maxDistance = Math.min(d + 6, Math.min(edgeX, edgeY) + 2);
@@ -712,18 +743,43 @@ export class Game {
       color: cfg.color, alive: true,
       type: t.type, originX: t.x, originY: t.y,
     });
-    this.audio.fire(t.type);
+    this.audio.fire(t.type, this.panOf(t.x));
+    this.burst(
+      t.x + Math.cos(t.angle) * 24,
+      t.y + Math.sin(t.angle) * 24,
+      0.55, 3, cfg.color, 34, 0.055, 0.11,
+    );
   }
 
   private damageEnemy(e: Enemy, amount: number, pierce = false) {
     if (e.dead) return;
     const armorConstant = 50;
-    e.hp -= pierce ? amount : amount * (1 - e.armor / (e.armor + armorConstant));
+    const dealt = pierce ? amount : amount * (1 - e.armor / (e.armor + armorConstant));
+    e.hp -= dealt;
+    const now = performance.now();
+    if (now - (e.lastFloat ?? 0) > 85) {
+      e.lastFloat = now;
+      this.floatText(
+        e.x, e.y, e.kind === 'air' ? 1.7 : 1,
+        `-${Math.round(dealt)}`, e.boss ? '#f2c66a' : '#fff2d2', dealt >= 60,
+      );
+    }
     if (e.hp <= 0) {
       e.dead = true;
       this.gold += e.bounty;
+      this.floatText(e.x, e.y, e.kind === 'air' ? 2 : 1.3, `+${e.bounty}`, '#ffd36e', true);
       this.burst(e.x, e.y, 0.35, e.size > 12 ? 12 : 5, '#ffcf82', 65, 0.1, 0.45);
-      if (e.size > 12) this.audio.explode(true);
+      if (e.size > 12) {
+        this.audio.explode(true, this.panOf(e.x));
+        this.view.shake(0.07);
+        this.effects.push({
+          x: e.x, y: e.y, z: 0.3, r: 6, maxR: e.size * 2.4,
+          life: 0.32, maxLife: 0.32, color: e.color, kind: 'ring',
+        });
+      }
+      this.killCombo = now - this.lastKillTime < 1500 ? this.killCombo + 1 : 1;
+      this.lastKillTime = now;
+      if (this.killCombo >= 3) this.showCombo(this.killCombo);
     }
   }
 
@@ -811,7 +867,19 @@ export class Game {
       color: '#fff0c8', kind: 'flash',
     });
     this.burst(mine.x, mine.y, 0.45, 16, mine.color, 95, 0.12, 0.5);
-    this.audio.explode(false);
+    for (let i = 0; i < 6; i++) {
+      this.particles.push({
+        id: ++this.id,
+        x: mine.x + (Math.random() - 0.5) * 12,
+        y: mine.y + (Math.random() - 0.5) * 12,
+        z: 0.2,
+        vx: 0, vy: 160 + Math.random() * 120, vz: 0,
+        life: 0.45, maxLife: 0.45,
+        color: '#bfe6f2', size: 0.12 + Math.random() * 0.1,
+      });
+    }
+    this.view.shake(0.06);
+    this.audio.explode(false, this.panOf(mine.x));
   }
 
   private hit(p: Projectile) {
@@ -819,6 +887,7 @@ export class Game {
     const px = p.lastX;
     const py = p.lastY;
     const hitZ = p.target?.kind === 'air' ? 1.3 : 0.5;
+    this.audio.hit(this.panOf(px));
 
     if (p.type === 'laser') {
       this.effects.push({
@@ -836,8 +905,14 @@ export class Game {
       for (const e of this.enemies) {
         if (!e.dead && Math.hypot(e.x - px, e.y - py) <= p.splash) this.damageEnemy(e, p.damage, p.pierceArmor);
       }
+      this.effects.push({
+        x: px, y: py, z: hitZ, r: p.splash * 0.55, maxR: p.splash,
+        life: 0.18, maxLife: 0.18, color: p.color, kind: 'ring',
+      });
+      this.burst(px, py, hitZ, 6, '#fff0c8', 80, 0.07, 0.3);
       this.smokePuff(px, py, hitZ, 7);
-      this.audio.explode(false);
+      this.audio.explode(false, this.panOf(px));
+      this.view.shake(0.03);
     } else {
       let hitAny = false;
       if (p.target && !p.target.dead && Math.hypot(p.target.x - px, p.target.y - py) <= 18) {
@@ -860,8 +935,10 @@ export class Game {
           x: px, y: py, z: hitZ, r: 0, maxR: 0, life: 0.3, maxLife: 0.3,
           color: '#f0e6ff', color2: p.color, kind: 'arc', points: arcPoints, width: 0.07,
         });
+        this.burst(px, py, hitZ, 4, p.color, 60, 0.06, 0.24);
         this.smokePuff(px, py, hitZ, 5);
       } else if (hitAny) {
+        this.burst(px, py, hitZ, 3, p.color, 55, 0.055, 0.22);
         this.smokePuff(px, py, hitZ, p.type === 'railgun' ? 6 : 4);
       }
     }
@@ -950,6 +1027,7 @@ export class Game {
       this.enforceSpacing();
 
       for (const t of this.towers) {
+        if (t.recoil && t.recoil > 0) t.recoil = Math.max(0, t.recoil - sdt * 7);
         t.cooldown -= sdt;
         if (t.cooldown > 0) continue;
         const cfg = TOWER_CONFIG[t.type];
@@ -957,6 +1035,7 @@ export class Game {
           this.layMines(t);
           t.cooldown = 1 / t.fireRate;
           continue;
+          
         }
         const target = this.findTarget(t);
         if (target) { this.fire(t, target); t.cooldown = 1 / t.fireRate; }
@@ -1015,7 +1094,8 @@ export class Game {
         } else {
           this.status = 'cleared';
           this.countdown = 6;
-          this.gold += 24;
+          // 通关奖励随关卡成长，保证后期升级炮塔的经济来源
+          this.gold += 20 + this.level.id * 2;
         }
       }
     }
@@ -1046,7 +1126,7 @@ export class Game {
     this.update(dt);
     this.render();
     this.syncUI();
-    requestAnimationFrame(this.loop);
+    this.rafId = requestAnimationFrame(this.loop);
   };
 
   private render() {
@@ -1066,6 +1146,9 @@ export class Game {
   }
 
   private showResult(win: boolean) {
+    const base = tileToPixel(BASE_TILE[0], BASE_TILE[1]);
+    this.view.cinematicFocus(base.x, base.y);
+    this.view.shake(win ? 0.05 : 0.18);
     $('result-title').textContent = win ? '防线守住了' : '基地失守';
     $('result-desc').textContent = win
       ? `第 ${this.level.id} 关「${this.level.name}」完成，剩余基地生命 ${this.lives}。`
@@ -1124,7 +1207,14 @@ export class Game {
 
   private syncUI() {
     $('stat-level').textContent = String(this.level.id);
-    $('stat-gold').textContent = String(this.gold);
+    const goldEl = $('stat-gold');
+    goldEl.textContent = String(this.gold);
+    if (this.lastGold >= 0 && this.gold !== this.lastGold) {
+      goldEl.classList.remove('pop');
+      void goldEl.offsetWidth;
+      goldEl.classList.add('pop');
+    }
+    this.lastGold = this.gold;
     $('stat-lives').textContent = String(this.lives);
     $('stat-wave').textContent = `${Math.max(0, this.waveIndex + 1)} / ${this.level.waves.length}`;
 
@@ -1153,7 +1243,7 @@ export class Game {
       start.disabled = true;
     } else if (this.status === 'cleared') {
       info.textContent = `本波清空 · ${Math.ceil(this.countdown)} 秒后自动开始下一波`;
-      start.textContent = '提前开始 +8';
+      start.textContent = '提前开始 +12';
       start.disabled = false;
     } else if (this.status === 'won') {
       info.textContent = '全部波次完成，防线守住了';

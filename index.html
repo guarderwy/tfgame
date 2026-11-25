@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
     <title>前线防线 · Frontline Defense</title>
   </head>
   <body>
@@ -25,8 +26,6 @@
 
         <div class="top-actions">
           <select id="level-select" aria-label="选择关卡"></select>
-          <button id="btn-deploy" class="btn btn-ghost" type="button">战术部署</button>
-          <button id="btn-codex" class="btn btn-ghost" type="button">敌人图鉴</button>
 
           <details class="tool-menu">
             <summary>视图</summary>
@@ -90,6 +89,7 @@
         <section class="stage">
           <div class="canvas-wrap">
             <canvas id="game" width="960" height="600"></canvas>
+            <div id="fx-layer" class="fx-layer"></div>
             <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
             <div id="stage-hud" class="stage-hud" data-state="ready"><span class="hud-dot"></span><span id="hud-status">待命</span></div>
             <div id="banner" class="banner hidden"></div>

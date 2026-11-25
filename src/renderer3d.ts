@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { BASE_TILE, COLS, ROWS, TILE, TOWER_CONFIG } from './config';
 import type { DecoKind, LevelTheme, Point, TowerType } from './types';
 import type { Effect, Enemy, NavalMine, Particle, PathData, Projectile, Tower } from './gameTypes';
@@ -87,6 +91,35 @@ function ribbonGeometry(source: Point[], width: number, y: number): THREE.Buffer
 function seeded(n: number) {
   const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
+}
+
+function normalTexture(repeat: [number, number], strength: number): THREE.CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const image = ctx.createImageData(size, size);
+  const height = (x: number, y: number) =>
+    seeded((x + size) % size * 3.7 + (y + size) % size * 9.1) * 0.62
+    + seeded((x + size) % size * 1.3 + (y + size) % size * 5.7) * 0.38;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const nx = -(height(x + 1, y) - height(x - 1, y)) * strength;
+      const ny = -(height(x, y + 1) - height(x, y - 1)) * strength;
+      const len = Math.hypot(nx, ny, 1) || 1;
+      const i = (y * size + x) * 4;
+      image.data[i] = (nx / len * 0.5 + 0.5) * 255;
+      image.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
+      image.data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
+      image.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(...repeat);
+  tex.anisotropy = 4;
+  return tex;
 }
 
 function terrainTexture(base: string, opts: {
@@ -285,6 +318,19 @@ export class Renderer3D {
 
   private rangeMesh: THREE.Mesh;
   private hoverMesh: THREE.Mesh;
+  private composer!: EffectComposer;
+  private bloomPass!: UnrealBloomPass;
+  private envMap: THREE.Texture | null = null;
+  private groundNormalTex: THREE.CanvasTexture | null = null;
+  private waterNormalTex: THREE.CanvasTexture | null = null;
+  private cameraShake = 0;
+  private cinematicT = 0;
+  private readonly cinematicTarget = new THREE.Vector3();
+  private readonly onResize = () => this.resize();
+  private readonly onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    this.zoomBy(e.deltaY > 0 ? 1.09 : 0.91);
+  };
   private clock = 0;
   private zoom = 1;
   private cameraAngle = 0;
@@ -299,14 +345,20 @@ export class Renderer3D {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = THREE.VSMShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.75;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.scene.environmentIntensity = 0.18;
 
     this.hemi = new THREE.HemisphereLight(0xcfe0b8, 0x28331f, 1.05);
     this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xffe9c4, 1.15);
     this.sun.position.set(12, 22, 10);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.radius = 3;
+    this.sun.shadow.blurSamples = 8;
     this.sun.shadow.camera.left = -18;
     this.sun.shadow.camera.right = 18;
     this.sun.shadow.camera.top = 14;
@@ -337,12 +389,69 @@ export class Renderer3D {
     this.hoverMesh.visible = false;
     this.helperGroup.add(this.hoverMesh);
 
-    window.addEventListener('resize', () => this.resize());
-    canvas.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      this.zoomBy(e.deltaY > 0 ? 1.09 : 0.91);
-    }, { passive: false });
+    this.setupEnvironment();
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
+    this.composer = new EffectComposer(this.renderer, target);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.72, 0.62, 0.88);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
+
+    window.addEventListener('resize', this.onResize);
+    canvas.addEventListener('wheel', this.onWheel, { passive: false });
     this.resize();
+  }
+
+  private setupEnvironment() {
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const envScene = new THREE.Scene();
+    envScene.background = new THREE.Color('#516155');
+    const panels: [string, [number, number, number], [number, number, number]][] = [
+      ['#b7d2e2', [0, 6, 0], [-Math.PI / 2, 0, 0]],
+      ['#f2d39b', [7, 2, 0], [0, -Math.PI / 2, 0]],
+      ['#8fb8c8', [-7, 2, 0], [0, Math.PI / 2, 0]],
+    ];
+    panels.forEach(([color, pos, rot]) => {
+      const panel = new THREE.Mesh(
+        new THREE.PlaneGeometry(14, 12),
+        new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }),
+      );
+      panel.position.set(...pos);
+      panel.rotation.set(...rot);
+      envScene.add(panel);
+    });
+    this.envMap = pmrem.fromScene(envScene, 0.04).texture;
+    this.scene.environment = this.envMap;
+    pmrem.dispose();
+    envScene.traverse((obj) => disposeObject(obj));
+  }
+
+  destroy() {
+    window.removeEventListener('resize', this.onResize);
+    this.canvas.removeEventListener('wheel', this.onWheel);
+    this.composer.dispose();
+    this.bloomPass.dispose();
+    this.renderer.dispose();
+    this.envMap?.dispose();
+    this.groundNormalTex?.dispose();
+    this.waterNormalTex?.dispose();
+  }
+
+  shake(amount: number) {
+    this.cameraShake = Math.min(0.4, this.cameraShake + amount);
+  }
+
+  cinematicFocus(px: number, py: number) {
+    this.cinematicT = 1.2;
+    this.cinematicTarget.set(toX(px), 0, toZ(py));
+  }
+
+  worldToScreen(px: number, py: number, pz: number): { x: number; y: number } | null {
+    const v = new THREE.Vector3(toX(px), pz, toZ(py)).project(this.camera);
+    if (v.z > 1) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
   }
 
   zoomBy(factor: number) {
@@ -363,12 +472,16 @@ export class Renderer3D {
 
   private updateCamera() {
     const horizontal = 14 * this.zoom;
+    const focus = this.cinematicT > 0 ? Math.min(1, this.cinematicT / 1.2) * 0.22 : 0;
+    const fx = this.cinematicTarget.x * focus;
+    const fz = this.cinematicTarget.z * focus;
+    const s = this.cameraShake;
     this.camera.position.set(
-      Math.sin(this.cameraAngle) * horizontal,
-      18 * this.zoom,
-      Math.cos(this.cameraAngle) * horizontal,
+      Math.sin(this.cameraAngle) * horizontal + fx + (Math.random() - 0.5) * s,
+      18 * this.zoom + (Math.random() - 0.5) * s,
+      Math.cos(this.cameraAngle) * horizontal + fz + (Math.random() - 0.5) * s,
     );
-    this.camera.lookAt(0, 0, 0);
+    this.camera.lookAt(fx, 0, fz);
   }
 
   resize() {
@@ -377,6 +490,7 @@ export class Renderer3D {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.composer.setSize(w, h);
   }
 
   getTileFromEvent(e: MouseEvent): [number, number] | null {
@@ -409,13 +523,21 @@ export class Renderer3D {
     this.scene.fog = new THREE.Fog(theme.fog, 28, 68);
     if (this.groundMat.map) this.groundMat.map.dispose();
     this.groundMat.map = groundTexture(theme);
+    if (this.groundNormalTex) this.groundNormalTex.dispose();
+    this.groundNormalTex = normalTexture([8, 5], 1.4);
+    this.groundMat.normalMap = this.groundNormalTex;
+    this.groundMat.normalScale.set(0.32, 0.32);
     this.groundMat.color.set('#ffffff');
     this.groundMat.needsUpdate = true;
     if (this.waterTex) this.waterTex.dispose();
     if (this.roadTex) this.roadTex.dispose();
     this.waterTex = waterTexture(theme.water);
     this.roadTex = roadTexture(theme);
+    if (this.waterNormalTex) this.waterNormalTex.dispose();
+    this.waterNormalTex = normalTexture([2, 8], 2.2);
     this.waterMat.map = this.waterTex;
+    this.waterMat.normalMap = this.waterNormalTex;
+    this.waterMat.normalScale.set(0.55, 0.55);
     this.waterMat.color.set('#ffffff');
     this.waterMat.emissive.set(theme.water).multiplyScalar(0.3);
     this.waterMat.needsUpdate = true;
@@ -590,6 +712,24 @@ export class Renderer3D {
     }
     base.position.set(tileX(BASE_TILE[0]), 0, tileZ(BASE_TILE[1]));
     this.staticGroup.add(base);
+
+    if (theme.night) {
+      const postMat = mat('#3a4147', { metalness: 0.5, roughness: 0.5 });
+      const bulbMat = new THREE.MeshBasicMaterial({ color: '#ffd39a' });
+      const spots: [number, number][] = [[2, 2], [COLS - 3, 2], [2, ROWS - 3], [COLS - 3, ROWS - 3]];
+      spots.forEach(([tx, ty]) => {
+        const lamp = new THREE.Group();
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.8, 6), postMat);
+        pole.position.y = 0.4;
+        const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), bulbMat);
+        bulb.position.y = 0.84;
+        const light = new THREE.PointLight(0xffb86b, 1.7, 10, 2);
+        light.position.y = 0.84;
+        lamp.add(pole, bulb, light);
+        lamp.position.set(tileX(tx), 0, tileZ(ty));
+        this.staticGroup.add(lamp);
+      });
+    }
   }
 
   private addGroundPatchwork(pathTiles: Set<string>, waterTileSet: Set<string>, theme: LevelTheme, dummy: THREE.Object3D) {
@@ -1486,6 +1626,7 @@ export class Renderer3D {
     }
     this.decorateEnemy(g, e);
     if (e.boss) { this.addBossCrown(g, e); g.scale.setScalar(1.18); }
+    Object.assign(g.userData, { prevAngle: e.angle });
     return g;
   }
 
@@ -1519,6 +1660,9 @@ export class Renderer3D {
       }
       mesh.position.set(tileX(t.tx), 0, tileZ(t.ty));
       mesh.userData.pivot.rotation.y = Math.PI / 2 - t.angle;
+      const recoil = Math.max(0, t.recoil ?? 0);
+      mesh.userData.pivot.position.z = -recoil * 0.18;
+      mesh.userData.pivot.rotation.x = recoil * 0.07;
       mesh.userData.pips.forEach((pip: THREE.Mesh, i: number) => { pip.visible = i < t.level; });
       (mesh.userData.pulse as THREE.Mesh[] | undefined)?.forEach((part, i) => {
         const wave = Math.sin(this.clock * 5 + t.id * 0.7 + i * 0.9);
@@ -1577,9 +1721,18 @@ export class Renderer3D {
         : e.type === 'bomber' ? 1.6 : e.type === 'helicopter' ? 1.35
         : e.kind === 'air' ? 1.25 : e.type === 'ship' || e.type === 'destroyer' ? 0.08 : 0;
       const bob = e.type === 'infantry' ? Math.sin(this.clock * 9 + e.id) * 0.035
-        : e.kind === 'air' ? Math.sin(this.clock * 3 + e.id) * 0.04 : 0;
+        : e.kind === 'air' ? Math.sin(this.clock * 3 + e.id) * 0.04
+          : e.kind === 'ground' ? Math.abs(Math.sin(this.clock * 8 + e.id)) * 0.018 : 0;
       mesh.position.set(toX(e.x), baseY + bob, toZ(e.y));
       mesh.rotation.y = Math.PI / 2 - e.angle;
+      if (e.kind === 'air' && mesh.userData.prevAngle !== undefined) {
+        let diff = e.angle - mesh.userData.prevAngle;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        const bank = THREE.MathUtils.clamp(-diff * 3.2, -0.5, 0.5);
+        mesh.rotation.z = THREE.MathUtils.lerp(mesh.rotation.z, bank, 0.18);
+      }
+      mesh.userData.prevAngle = e.angle;
       if (mesh.userData.wheels) {
         spinQ.setFromAxisAngle(spinAxis, e.traveled * 2.2);
         (mesh.userData.wheels as THREE.Mesh[]).forEach((wheel) => {
@@ -2001,11 +2154,21 @@ export class Renderer3D {
     this.syncHelpers(state);
     this.waterMat.emissiveIntensity = 0.12 + 0.08 * Math.sin(this.clock * 2.2);
     if (this.waterTex) this.waterTex.offset.y = (this.clock * 0.012) % 1;
+    if (this.waterNormalTex) {
+      this.waterNormalTex.offset.y = (this.clock * 0.03) % 1;
+      this.waterNormalTex.offset.x = (this.clock * 0.008) % 1;
+    }
     this.ripples.forEach(({ mesh, phase }) => {
       const k = (this.clock * 0.55 + phase / (Math.PI * 2)) % 1;
       mesh.scale.setScalar(0.6 + k * 1.5);
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.5 * (1 - k);
     });
-    this.renderer.render(this.scene, this.camera);
+    if (this.cameraShake > 0 || this.cinematicT > 0) {
+      this.cameraShake *= 0.84;
+      if (this.cameraShake < 0.002) this.cameraShake = 0;
+      this.cinematicT = Math.max(0, this.cinematicT - 1 / 60);
+      this.updateCamera();
+    }
+    this.composer.render();
   }
 }
