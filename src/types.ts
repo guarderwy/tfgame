@@ -52,6 +52,7 @@ export interface Wave {
 }
 
 export type DecoKind = 'trees' | 'rocks' | 'forest' | 'reeds' | 'crates' | 'rails' | 'ruins' | 'desert' | 'snow' | 'city' | 'space';
+export type WeatherKind = 'snow' | 'rain' | 'sandstorm' | 'thunderstorm' | 'fireflies' | 'fog';
 
 export interface LevelTheme {
   ground: string;
@@ -63,6 +64,7 @@ export interface LevelTheme {
   ambient: number;
   sun: number;
   night?: boolean;
+  weather?: WeatherKind;
 }
 
 export interface LevelDef {

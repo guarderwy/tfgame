@@ -4,6 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { BASE_TILE, COLS, ROWS, TILE, TOWER_CONFIG } from './config';
+import { WeatherSystem } from './weather';
 import type { DecoKind, LevelTheme, Point, TowerType } from './types';
 import type { Effect, Enemy, NavalMine, Particle, PathData, Projectile, Tower } from './gameTypes';
 
@@ -321,6 +322,7 @@ export class Renderer3D {
   private composer!: EffectComposer;
   private bloomPass!: UnrealBloomPass;
   private envMap: THREE.Texture | null = null;
+  private weather!: WeatherSystem;
   private groundNormalTex: THREE.CanvasTexture | null = null;
   private waterNormalTex: THREE.CanvasTexture | null = null;
   private cameraShake = 0;
@@ -364,6 +366,8 @@ export class Renderer3D {
     this.sun.shadow.camera.top = 14;
     this.sun.shadow.camera.bottom = -14;
     this.scene.add(this.sun);
+
+    this.weather = new WeatherSystem(this.scene, this.hemi, this.sun, this.renderer);
 
     this.groundMat = mat('#2f3d29');
     this.groundPlane = new THREE.Mesh(new THREE.PlaneGeometry(COLS, ROWS), this.groundMat);
@@ -427,9 +431,15 @@ export class Renderer3D {
     envScene.traverse((obj) => disposeObject(obj));
   }
 
+  /** 注入雷声回调（由 Game 层接 AudioKit，天气系统不持有音频引用） */
+  setThunderSound(cb: () => void) {
+    this.weather.setThunderCallback(cb);
+  }
+
   destroy() {
     window.removeEventListener('resize', this.onResize);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.weather.dispose();
     this.composer.dispose();
     this.bloomPass.dispose();
     this.renderer.dispose();
@@ -546,6 +556,7 @@ export class Renderer3D {
     this.hemi.groundColor.set(theme.night ? '#131a1c' : '#28331f');
     this.sun.intensity = theme.sun;
     this.sun.color.set(theme.night ? '#a9c2e0' : '#ffe9c4');
+    this.weather.applyTheme(theme);
 
     const dummy = new THREE.Object3D();
     const side: THREE.MeshStandardMaterialParameters = { side: THREE.DoubleSide };
@@ -2169,6 +2180,7 @@ export class Renderer3D {
       this.cinematicT = Math.max(0, this.cinematicT - 1 / 60);
       this.updateCamera();
     }
+    this.weather.update();
     this.composer.render();
   }
 }

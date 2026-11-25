@@ -115,6 +115,7 @@ export class Game {
     this.screenMode = this.restoreScreenMode();
     this.setScreenMode(this.screenMode, false);
     this.view = new Renderer3D(canvas);
+    this.view.setThunderSound(() => this.audio.thunder());
     this.buildTowerList();
     this.buildEnemyCodex();
     this.fillLevelSelect();

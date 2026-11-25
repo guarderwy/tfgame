@@ -272,6 +272,14 @@ export class AudioKit {
     this.tone(550, 0.2, 'square', 0.1);
   }
 
+  /** 雷声：低频轰鸣 + 滤波噪声滚雷，与闪电闪光同步触发 */
+  thunder(pan = 0) {
+    this.noise(0.9, 0.22, 320, 70, pan);
+    this.tone(58, 0.7, 'sine', 0.14, 32, pan);
+    // 余震二次滚雷
+    window.setTimeout(() => this.noise(0.6, 0.12, 220, 60, pan), 280);
+  }
+
   win() {
     [392, 494, 587, 784].forEach((f, i) => setTimeout(() => this.tone(f, 0.3, 'triangle', 0.16), i * 130));
   }
