@@ -86,6 +86,20 @@ export const UPGRADE_FACTOR = {
 export const SELL_REFUND = 0.6;
 export const MAX_LEVEL = 3;
 
+// 波次节奏与奖励：整备倒计时、提前出击奖励、清波奖励（随关卡成长）
+export const WAVE_BREAK_SECONDS = 6;
+export const WAVE_BREAK_BONUS = 12;
+export const WAVE_CLEAR_BONUS_BASE = 20;
+export const WAVE_CLEAR_BONUS_PER_LEVEL = 2;
+
+// 星级评定：按通关时剩余基地生命比例换算（3 星 ≥80%，2 星 ≥50%，通关即 1 星）
+export function starsFor(lives: number, maxLives: number): number {
+  if (maxLives <= 0) return 1;
+  if (lives >= maxLives * 0.8) return 3;
+  if (lives >= maxLives * 0.5) return 2;
+  return 1;
+}
+
 // 跨关难度曲线：敌人生命/赏金随关卡线性放大（第 20 关约 1.86 倍），
 // 与初始金币（260 起步、约每关 +22）和波次数量增长共同构成整体难度递进
 export function difficultyScale(levelId: number) {

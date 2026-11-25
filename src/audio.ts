@@ -45,6 +45,15 @@ export class AudioKit {
   muted = false;
   musicMuted = false;
   private disposed = false;
+  private timers = new Set<number>(); // 延迟衍生的音效定时器，dispose 时统一清理
+
+  private after(ms: number, fn: () => void) {
+    const id = window.setTimeout(() => {
+      this.timers.delete(id);
+      fn();
+    }, ms);
+    this.timers.add(id);
+  }
 
   private ensure(): AudioContext | null {
     if (this.disposed || typeof AudioContext === 'undefined') return null;
@@ -155,6 +164,8 @@ export class AudioKit {
 
   dispose() {
     this.stopMusic();
+    this.timers.forEach((id) => window.clearTimeout(id));
+    this.timers.clear();
     if (this.ambience) {
       try { this.ambience.src.stop(); } catch { /* 已停止 */ }
       this.ambience = null;
@@ -277,14 +288,14 @@ export class AudioKit {
     this.noise(0.9, 0.22, 320, 70, pan);
     this.tone(58, 0.7, 'sine', 0.14, 32, pan);
     // 余震二次滚雷
-    window.setTimeout(() => this.noise(0.6, 0.12, 220, 60, pan), 280);
+    this.after(280, () => this.noise(0.6, 0.12, 220, 60, pan));
   }
 
   win() {
-    [392, 494, 587, 784].forEach((f, i) => setTimeout(() => this.tone(f, 0.3, 'triangle', 0.16), i * 130));
+    [392, 494, 587, 784].forEach((f, i) => this.after(i * 130, () => this.tone(f, 0.3, 'triangle', 0.16)));
   }
 
   lose() {
-    [330, 262, 196].forEach((f, i) => setTimeout(() => this.tone(f, 0.4, 'sawtooth', 0.16), i * 180));
+    [330, 262, 196].forEach((f, i) => this.after(i * 180, () => this.tone(f, 0.4, 'sawtooth', 0.16)));
   }
 }

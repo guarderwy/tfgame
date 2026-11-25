@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { BASE_TILE, COLS, ROWS, TILE, TOWER_CONFIG } from './config';
 import { WeatherSystem } from './weather';
-import type { DecoKind, LevelTheme, Point, TowerType } from './types';
+import type { DecoKind, EnemyType, LevelTheme, Point, TowerType } from './types';
 import type { Effect, Enemy, NavalMine, Particle, PathData, Projectile, Tower } from './gameTypes';
 
 export interface RenderState {
@@ -28,9 +28,10 @@ const tileX = (tx: number) => tx + 0.5 - COLS / 2;
 const tileZ = (ty: number) => ty + 0.5 - ROWS / 2;
 const toWorldRange = (px: number) => px / TILE;
 const UP = new THREE.Vector3(0, 1, 0);
+const TMP_V3 = new THREE.Vector3(); // 模块级复用向量，热路径禁止 new
 const alignYAxis = (obj: THREE.Object3D, dx: number, dz: number) => {
   const len = Math.hypot(dx, dz) || 0.001;
-  obj.quaternion.setFromUnitVectors(UP, new THREE.Vector3(dx / len, 0, dz / len));
+  obj.quaternion.setFromUnitVectors(UP, TMP_V3.set(dx / len, 0, dz / len));
   return len;
 };
 
@@ -312,6 +313,30 @@ export class Renderer3D {
   private mineMeshes = new Map<NavalMine, THREE.Group>();
   private enemyMeshes = new Map<Enemy, THREE.Group>();
   private barMeshes = new Map<Enemy, THREE.Group>();
+
+  // 每帧同步用的复用容器：禁止在热路径 new Set / 展开数组
+  private aliveTowers = new Set<Tower>();
+  private aliveMines = new Set<NavalMine>();
+  private aliveEnemies = new Set<Enemy>();
+  private aliveProjectiles = new Set<Projectile>();
+  private aliveEffects = new Set<Effect>();
+  private aliveParticles = new Set<Particle>();
+  private spinQ = new THREE.Quaternion();
+  private spinAxis = new THREE.Vector3(0, 1, 0);
+
+  // 敌人/血条对象池：死亡实体回收复用，消除刷怪高峰期的 geometry churn。
+  // 池按「兵种+是否首领」分键，王冠/光环等变体装饰与实体一一对应。
+  private enemyPool = new Map<string, THREE.Group[]>();
+  private barPool: Record<'normal' | 'boss', THREE.Group[]> = { normal: [], boss: [] };
+  private static readonly POOL_CAP = 14;
+  private static readonly BAR_POOL_CAP = 24;
+
+  private canvasW = 960;
+  private canvasH = 600;
+
+  // 大本营旗帜波动（buildLevel 时重建）
+  private flag: THREE.Mesh | null = null;
+  private flagBasePos: Float32Array | null = null;
   private projMeshes = new Map<Projectile, THREE.Object3D>();
   private effectMeshes = new Map<Effect, THREE.Object3D>();
   private particleMeshes = new Map<Particle, THREE.Object3D>();
@@ -458,10 +483,9 @@ export class Renderer3D {
   }
 
   worldToScreen(px: number, py: number, pz: number): { x: number; y: number } | null {
-    const v = new THREE.Vector3(toX(px), pz, toZ(py)).project(this.camera);
+    const v = TMP_V3.set(toX(px), pz, toZ(py)).project(this.camera);
     if (v.z > 1) return null;
-    const rect = this.canvas.getBoundingClientRect();
-    return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
+    return { x: (v.x * 0.5 + 0.5) * this.canvasW, y: (-v.y * 0.5 + 0.5) * this.canvasH };
   }
 
   zoomBy(factor: number) {
@@ -497,6 +521,8 @@ export class Renderer3D {
   resize() {
     const w = this.canvas.clientWidth || 960;
     const h = this.canvas.clientHeight || 600;
+    this.canvasW = w;
+    this.canvasH = h;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -713,8 +739,12 @@ export class Renderer3D {
     roof.rotation.y = Math.PI / 4;
     const pole = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.65, 6), mat('#e8e0c8')));
     pole.position.set(0.4, 0.9, -0.4);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.24), mat('#e0b34d', { side: THREE.DoubleSide }));
+    // 分段旗帜：顶点每帧做正弦波动，贴杆端固定、旗尾摆幅递增
+    const flagGeo = new THREE.PlaneGeometry(0.4, 0.24, 8, 2);
+    const flag = new THREE.Mesh(flagGeo, mat('#e0b34d', { side: THREE.DoubleSide }));
     flag.position.set(0.61, 1.06, -0.4);
+    this.flag = flag;
+    this.flagBasePos = Float32Array.from(flagGeo.attributes.position.array as Float32Array);
     base.add(platform, block, roof, pole, flag);
     if (theme.night) {
       const lamp = new THREE.PointLight(0xffc98a, 2.2, 11);
@@ -1029,7 +1059,7 @@ export class Renderer3D {
     return g;
   }
 
-  private addBossCrown(g: THREE.Group, e: Enemy) {
+  private addBossCrown(g: THREE.Group, e: Enemy): THREE.Group {
     const crown = new THREE.Group();
     const gold = mat('#f2c66a', { metalness: 0.7, roughness: 0.25, emissive: new THREE.Color('#8a5a12'), emissiveIntensity: 0.35 });
     const band = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.12, 8), gold);
@@ -1042,6 +1072,7 @@ export class Renderer3D {
     }
     crown.position.y = e.kind === 'air' ? 0.62 : e.type === 'strider' ? 1.65 : e.type === 'tank' || e.type === 'mech' ? 1.5 : 1.0;
     g.add(crown);
+    return crown;
   }
 
   private decorateTower(g: THREE.Group, t: Tower, pivot: THREE.Group, color: string): THREE.Mesh[] {
@@ -1287,15 +1318,18 @@ export class Renderer3D {
         sph(0.05, glowMat('#66d0ff', 1.4), 0, -0.02, 0.18);
         break;
     }
-    if (e.boss) {
+    // 首领光环：所有敌人模型统一携带（非首领隐藏），引用存入 userData，
+    // 避免每帧 children.find 查找，也让对象池复用时状态可恢复
+    {
       const aura = new THREE.Mesh(
         new THREE.TorusGeometry(0.55, 0.025, 6, 32),
         new THREE.MeshBasicMaterial({ color: '#f2c66a', transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false }),
       );
       aura.rotation.x = Math.PI / 2;
       aura.position.y = 0.08;
-      aura.userData.bossAura = true;
+      aura.visible = !!e.boss;
       g.add(aura);
+      Object.assign(g.userData, { aura });
     }
   }
 
@@ -1636,9 +1670,40 @@ export class Renderer3D {
       g.userData = { legs };
     }
     this.decorateEnemy(g, e);
-    if (e.boss) { this.addBossCrown(g, e); g.scale.setScalar(1.18); }
+    if (e.boss) { g.userData.crown = this.addBossCrown(g, e); g.scale.setScalar(1.18); }
     Object.assign(g.userData, { prevAngle: e.angle });
     return g;
+  }
+
+  private poolKey(type: EnemyType, boss: boolean) {
+    return boss ? `${type}:boss` : type;
+  }
+
+  private recycleEnemy(type: EnemyType, boss: boolean, mesh: THREE.Group) {
+    const key = this.poolKey(type, boss);
+    const pool = this.enemyPool.get(key);
+    if (pool) {
+      if (pool.length >= Renderer3D.POOL_CAP) {
+        disposeObject(mesh);
+        return;
+      }
+      pool.push(mesh);
+    } else {
+      this.enemyPool.set(key, [mesh]);
+    }
+    // 复位姿态与变体装饰，等待下次复用
+    mesh.rotation.set(0, 0, 0);
+    const aura = mesh.userData.aura as THREE.Mesh | undefined;
+    if (aura) aura.visible = false;
+  }
+
+  private recycleBar(boss: boolean, bar: THREE.Group) {
+    const pool = boss ? this.barPool.boss : this.barPool.normal;
+    if (pool.length >= Renderer3D.BAR_POOL_CAP) {
+      disposeObject(bar);
+      return;
+    }
+    pool.push(bar);
   }
 
   private createBar(boss = false): THREE.Group {
@@ -1654,14 +1719,17 @@ export class Renderer3D {
   }
 
   private syncTowers(towers: Tower[]) {
-    const alive = new Set(towers);
-    [...this.towerMeshes.keys()].forEach((t) => {
+    const alive = this.aliveTowers;
+    alive.clear();
+    for (const t of towers) alive.add(t);
+    // Map 支持遍历中删除；配合复用的 alive 集合实现零分配的增删同步
+    for (const [t, mesh] of this.towerMeshes) {
       if (!alive.has(t)) {
-        this.entityGroup.remove(this.towerMeshes.get(t)!);
-        disposeObject(this.towerMeshes.get(t)!);
+        this.entityGroup.remove(mesh);
+        disposeObject(mesh);
         this.towerMeshes.delete(t);
       }
-    });
+    }
     towers.forEach((t) => {
       let mesh = this.towerMeshes.get(t);
       if (!mesh) {
@@ -1685,14 +1753,16 @@ export class Renderer3D {
   }
 
   private syncMines(mines: NavalMine[]) {
-    const alive = new Set(mines);
-    [...this.mineMeshes.keys()].forEach((m) => {
+    const alive = this.aliveMines;
+    alive.clear();
+    for (const m of mines) alive.add(m);
+    for (const [m, mesh] of this.mineMeshes) {
       if (!alive.has(m)) {
-        this.entityGroup.remove(this.mineMeshes.get(m)!);
-        disposeObject(this.mineMeshes.get(m)!);
+        this.entityGroup.remove(mesh);
+        disposeObject(mesh);
         this.mineMeshes.delete(m);
       }
-    });
+    }
     mines.forEach((m) => {
       let mesh = this.mineMeshes.get(m);
       if (!mesh) {
@@ -1706,25 +1776,33 @@ export class Renderer3D {
   }
 
   private syncEnemies(enemies: Enemy[]) {
-    const alive = new Set(enemies);
-    const spinQ = new THREE.Quaternion();
-    const spinAxis = new THREE.Vector3(0, 1, 0);
-    [...this.enemyMeshes.keys()].forEach((e) => {
+    const alive = this.aliveEnemies;
+    alive.clear();
+    for (const e of enemies) alive.add(e);
+    for (const [e, mesh] of this.enemyMeshes) {
       if (!alive.has(e)) {
-        this.entityGroup.remove(this.enemyMeshes.get(e)!);
-        disposeObject(this.enemyMeshes.get(e)!);
+        this.entityGroup.remove(mesh);
+        this.recycleEnemy(e.type, e.boss, mesh);
         this.enemyMeshes.delete(e);
         const bar = this.barMeshes.get(e);
-        if (bar) { this.fxGroup.remove(bar); disposeObject(bar); this.barMeshes.delete(e); }
+        if (bar) {
+          this.fxGroup.remove(bar);
+          this.recycleBar(e.boss, bar);
+          this.barMeshes.delete(e);
+        }
       }
-    });
+    }
     enemies.forEach((e) => {
       let mesh = this.enemyMeshes.get(e);
       if (!mesh) {
-        mesh = this.createEnemy(e);
+        // 优先从对象池取同类实体，池空才新建
+        mesh = this.enemyPool.get(this.poolKey(e.type, e.boss))?.pop() ?? this.createEnemy(e);
+        mesh.scale.setScalar(e.boss ? 1.18 : 1);
+        const crown = mesh.userData.crown as THREE.Group | undefined;
+        if (crown) crown.visible = e.boss;
         this.enemyMeshes.set(e, mesh);
         this.entityGroup.add(mesh);
-        const bar = this.createBar(e.boss);
+        const bar = (e.boss ? this.barPool.boss : this.barPool.normal).pop() ?? this.createBar(e.boss);
         this.barMeshes.set(e, bar);
         this.fxGroup.add(bar);
       }
@@ -1745,9 +1823,9 @@ export class Renderer3D {
       }
       mesh.userData.prevAngle = e.angle;
       if (mesh.userData.wheels) {
-        spinQ.setFromAxisAngle(spinAxis, e.traveled * 2.2);
+        this.spinQ.setFromAxisAngle(this.spinAxis, e.traveled * 2.2);
         (mesh.userData.wheels as THREE.Mesh[]).forEach((wheel) => {
-          wheel.quaternion.copy(wheel.userData.baseQuat).multiply(spinQ);
+          wheel.quaternion.copy(wheel.userData.baseQuat).multiply(this.spinQ);
         });
       }
       if (mesh.userData.propeller) (mesh.userData.propeller as THREE.Mesh).rotation.z = this.clock * 28;
@@ -1764,12 +1842,12 @@ export class Renderer3D {
           leg.rotation.x = Math.sin(this.clock * 8 + i * Math.PI) * 0.32;
         });
       }
-      if (e.boss) {
-        const aura = mesh.children.find((child) => child.userData.bossAura) as THREE.Mesh | undefined;
-        if (aura) {
+      const aura = mesh.userData.aura as THREE.Mesh | undefined;
+      if (aura) {
+        aura.visible = e.boss;
+        if (e.boss) {
           aura.rotation.z = this.clock * 0.9;
-          const auraMat = aura.material as THREE.MeshBasicMaterial;
-          auraMat.opacity = 0.5 + 0.28 * Math.sin(this.clock * 4);
+          (aura.material as THREE.MeshBasicMaterial).opacity = 0.5 + 0.28 * Math.sin(this.clock * 4);
         }
       }
 
@@ -1856,14 +1934,16 @@ export class Renderer3D {
   }
 
   private syncProjectiles(projectiles: Projectile[]) {
-    const alive = new Set(projectiles);
-    [...this.projMeshes.keys()].forEach((p) => {
+    const alive = this.aliveProjectiles;
+    alive.clear();
+    for (const p of projectiles) alive.add(p);
+    for (const [p, mesh] of this.projMeshes) {
       if (!alive.has(p)) {
-        this.fxGroup.remove(this.projMeshes.get(p)!);
-        disposeObject(this.projMeshes.get(p)!);
+        this.fxGroup.remove(mesh);
+        disposeObject(mesh);
         this.projMeshes.delete(p);
       }
-    });
+    }
     projectiles.forEach((p) => {
       let mesh = this.projMeshes.get(p);
       if (!mesh) {
@@ -2001,14 +2081,16 @@ export class Renderer3D {
   }
 
   private syncEffects(effects: Effect[]) {
-    const alive = new Set(effects);
-    [...this.effectMeshes.keys()].forEach((e) => {
+    const alive = this.aliveEffects;
+    alive.clear();
+    for (const e of effects) alive.add(e);
+    for (const [e, mesh] of this.effectMeshes) {
       if (!alive.has(e)) {
-        this.fxGroup.remove(this.effectMeshes.get(e)!);
-        disposeObject(this.effectMeshes.get(e)!);
+        this.fxGroup.remove(mesh);
+        disposeObject(mesh);
         this.effectMeshes.delete(e);
       }
-    });
+    }
     effects.forEach((e) => {
       let mesh = this.effectMeshes.get(e);
       if (!mesh) {
@@ -2087,14 +2169,16 @@ export class Renderer3D {
   }
 
   private syncParticles(particles: Particle[]) {
-    const alive = new Set(particles);
-    [...this.particleMeshes.keys()].forEach((p) => {
+    const alive = this.aliveParticles;
+    alive.clear();
+    for (const p of particles) alive.add(p);
+    for (const [p, mesh] of this.particleMeshes) {
       if (!alive.has(p)) {
-        this.fxGroup.remove(this.particleMeshes.get(p)!);
-        disposeObject(this.particleMeshes.get(p)!);
+        this.fxGroup.remove(mesh);
+        disposeObject(mesh);
         this.particleMeshes.delete(p);
       }
-    });
+    }
     particles.forEach((p) => {
       let mesh = this.particleMeshes.get(p);
       if (!mesh) {
@@ -2181,6 +2265,28 @@ export class Renderer3D {
       this.updateCamera();
     }
     this.weather.update();
+    this.updateFlag();
     this.composer.render();
+  }
+
+  /** 大本营旗帜：顶点级正弦波，贴杆一端固定、旗尾摆幅递增，双层波叠加出布料飘动感 */
+  private updateFlag() {
+    const flag = this.flag;
+    const base = this.flagBasePos;
+    if (!flag || !base) return;
+    const geo = flag.geometry;
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    const t = this.clock;
+    for (let i = 0; i < arr.length; i += 3) {
+      const bx = base[i];
+      const by = base[i + 1];
+      const k = (bx + 0.2) / 0.4; // 离杆距离归一化：0=贴杆固定，1=旗尾最大摆幅
+      arr[i] = bx;
+      arr[i + 1] = by + Math.sin(t * 5.6 + bx * 9) * 0.02 * k;
+      arr[i + 2] = Math.sin(t * 4.2 + bx * 7 - by * 3) * 0.085 * k;
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
   }
 }

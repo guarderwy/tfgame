@@ -1,6 +1,7 @@
 import {
   BASE_TILE, COLS, difficultyScale, ENEMY_CONFIG, HEIGHT, MAX_LEVEL, ROWS, SELL_REFUND,
-  TILE, TOWER_CONFIG, UPGRADE_FACTOR, WIDTH, tileToPixel,
+  TILE, TOWER_CONFIG, UPGRADE_FACTOR, WAVE_BREAK_BONUS, WAVE_BREAK_SECONDS,
+  WAVE_CLEAR_BONUS_BASE, WAVE_CLEAR_BONUS_PER_LEVEL, WIDTH, starsFor, tileToPixel,
 } from './config';
 import { LEVELS } from './levels';
 import { Renderer3D } from './renderer3d';
@@ -109,9 +110,34 @@ export class Game {
   private killCombo = 0;
   private lastKillTime = 0;
   private lastGold = -1;
+  // 进度持久化：最高解锁关卡 + 各关最佳星级
+  private unlocked = 1;
+  private stars: Record<number, number> = {};
+  // UI 优化：元素引用缓存 + 脏标记，每帧仅在数值变化时写 DOM
+  private elCache = new Map<string, HTMLElement>();
+  private towerCards: HTMLButtonElement[] = [];
+  private uiCache = {
+    level: -1, gold: -1, lives: -1, wave: '', status: '', progress: -1,
+    remaining: -1, startState: '', upgradeKey: '', towerKey: '',
+  };
+  private readonly onVisibility = () => {
+    // 切出页面时自动暂停作战，避免后台空跑模拟与音乐调度
+    if (document.hidden && this.status === 'wave' && !this.paused) this.togglePause();
+  };
+
+  private el(id: string): HTMLElement {
+    let node = this.elCache.get(id);
+    if (!node) {
+      node = document.getElementById(id)!;
+      this.elCache.set(id, node);
+    }
+    return node;
+  }
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.loadProgress();
+    this.restoreAudioSettings();
     this.screenMode = this.restoreScreenMode();
     this.setScreenMode(this.screenMode, false);
     this.view = new Renderer3D(canvas);
@@ -123,22 +149,71 @@ export class Game {
     this.showTab('build');
     this.bindModals();
     this.bindEvents();
-    this.loadLevel(1);
+    this.loadLevel(this.unlocked); // 从最高解锁关卡继续
     this.lastTime = performance.now();
     this.rafId = requestAnimationFrame(this.loop);
     window.addEventListener('pagehide', this.destroy);
     window.addEventListener('beforeunload', this.destroy);
+    document.addEventListener('visibilitychange', this.onVisibility);
+    this.syncAudioButtons();
   }
 
   destroy = () => {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('pagehide', this.destroy);
     window.removeEventListener('beforeunload', this.destroy);
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.view.destroy();
     this.audio.dispose();
   };
 
   private get level() { return LEVELS[this.levelIndex]; }
+
+  private loadProgress() {
+    try {
+      this.unlocked = Math.max(1, Number(localStorage.getItem('tfgame:unlocked')) || 1);
+      this.stars = JSON.parse(localStorage.getItem('tfgame:stars') ?? '{}');
+    } catch {
+      this.unlocked = 1;
+      this.stars = {};
+    }
+  }
+
+  private saveProgress() {
+    try {
+      localStorage.setItem('tfgame:unlocked', String(this.unlocked));
+      localStorage.setItem('tfgame:stars', JSON.stringify(this.stars));
+    } catch { /* 忽略隐私模式限制 */ }
+  }
+
+  private restoreAudioSettings() {
+    try {
+      this.audio.setMusicMuted(localStorage.getItem('tfgame:musicMuted') === '1');
+      this.audio.setMuted(localStorage.getItem('tfgame:sfxMuted') === '1');
+    } catch { /* 忽略隐私模式限制 */ }
+  }
+
+  private persistAudioSettings() {
+    try {
+      localStorage.setItem('tfgame:musicMuted', this.audio.musicMuted ? '1' : '0');
+      localStorage.setItem('tfgame:sfxMuted', this.audio.muted ? '1' : '0');
+    } catch { /* 忽略隐私模式限制 */ }
+  }
+
+  private togglePause() {
+    if (this.status === 'won' || this.status === 'lost') return;
+    this.paused = !this.paused;
+    $('btn-pause').textContent = this.paused ? '继续' : '暂停';
+    $('btn-pause').classList.toggle('active', this.paused);
+  }
+
+  /** 启动时按持久化设置同步音乐/音效按钮文案与划线态 */
+  private syncAudioButtons() {
+    $('btn-music').textContent = this.audio.musicMuted ? '音乐 关' : '音乐 开';
+    $('btn-music').classList.toggle('active', this.audio.musicMuted);
+    $('btn-audio').textContent = this.audio.muted ? '音效 关' : '音效 开';
+    $('btn-audio').classList.toggle('active', this.audio.muted);
+  }
 
   private burst(x: number, y: number, z: number, count: number, color: string, speed = 70, size = 0.09, life = 0.5) {
     if (this.particles.length > 320) this.particles.splice(0, this.particles.length - 280);
@@ -216,18 +291,20 @@ export class Game {
         <span class="tower-key">${i + 1}</span>
       </button>`;
     }).join('');
-    list.querySelectorAll<HTMLButtonElement>('.tower-card').forEach((btn) => {
+    this.towerCards = Array.from(list.querySelectorAll<HTMLButtonElement>('.tower-card'));
+    for (const btn of this.towerCards) {
       btn.addEventListener('click', () => {
         const type = btn.dataset.type as TowerType;
         this.buildType = this.buildType === type ? null : type;
         if (this.buildType) this.selected = null;
+        this.uiCache.towerKey = ''; // 卡片重建后强制刷新一次高亮/可负担态
         this.syncTowerList();
         this.syncInfo();
       });
       btn.addEventListener('mouseenter', () => {
         if (!this.selected && !this.buildType) this.showWeaponPreview(btn.dataset.type as TowerType);
       });
-    });
+    }
   }
 
   private showTab(name: 'build' | 'codex') {
@@ -353,10 +430,14 @@ export class Game {
   }
 
   private syncTowerList() {
-    document.querySelectorAll<HTMLButtonElement>('.tower-card').forEach((btn) => {
+    // 缓存卡片引用 + 变化去重：金币未变且建造模式未变时跳过 DOM 写入
+    const key = `${this.buildType ?? ''}|${this.gold}`;
+    if (this.uiCache.towerKey === key) return;
+    this.uiCache.towerKey = key;
+    for (const btn of this.towerCards) {
       btn.classList.toggle('active', btn.dataset.type === this.buildType);
-      btn.classList.toggle('unaffordable', Number(TOWER_CONFIG[btn.dataset.type as TowerType].cost) > this.gold);
-    });
+      btn.classList.toggle('unaffordable', TOWER_CONFIG[btn.dataset.type as TowerType].cost > this.gold);
+    }
   }
 
   private restoreScreenMode(): 'standard' | 'wide' {
@@ -408,14 +489,10 @@ export class Game {
 
     $('btn-start').addEventListener('click', () => this.startWave(true));
     $('btn-speed').addEventListener('click', () => {
-      this.speed = this.speed === 1 ? 2 : 1;
+      this.speed = this.speed === 1 ? 2 : this.speed === 2 ? 3 : 1;
       $('btn-speed').textContent = `速度 ${this.speed}x`;
     });
-    $('btn-pause').addEventListener('click', () => {
-      this.paused = !this.paused;
-      $('btn-pause').textContent = this.paused ? '继续' : '暂停';
-      $('btn-pause').classList.toggle('active', this.paused);
-    });
+    $('btn-pause').addEventListener('click', () => this.togglePause());
     $('btn-screen-standard').addEventListener('click', () => this.setScreenMode('standard'));
     $('btn-screen-wide').addEventListener('click', () => this.setScreenMode('wide'));
     $('btn-rot-left').addEventListener('click', () => this.view.rotateBy(-Math.PI / 8));
@@ -427,6 +504,7 @@ export class Game {
       $('btn-music').textContent = muted ? '音乐 关' : '音乐 开';
       $('btn-music').classList.toggle('active', muted);
       if (!muted) this.audio.unlock();
+      this.persistAudioSettings();
     });
     $('btn-audio').addEventListener('click', () => {
       const muted = !this.audio.muted;
@@ -434,6 +512,7 @@ export class Game {
       $('btn-audio').textContent = muted ? '音效 关' : '音效 开';
       $('btn-audio').classList.toggle('active', muted);
       if (!muted) this.audio.unlock();
+      this.persistAudioSettings();
     });
     document.addEventListener('click', () => this.audio.unlock(), { once: true });
     $('btn-upgrade').addEventListener('click', () => {
@@ -463,6 +542,7 @@ export class Game {
       if (e.key === 'q' || e.key === 'Q') this.view.rotateBy(-Math.PI / 8);
       if (e.key === 'e' || e.key === 'E') this.view.rotateBy(Math.PI / 8);
       if (e.key === 'f' || e.key === 'F') this.setScreenMode(this.screenMode === 'standard' ? 'wide' : 'standard');
+      if (e.key === 'p' || e.key === 'P') this.togglePause();
       if (e.code === 'Space') { e.preventDefault(); if (this.status !== 'wave') this.startWave(true); }
     });
   }
@@ -587,28 +667,47 @@ export class Game {
     if (!pos) return;
     const layer = $('fx-layer');
     if (layer.childElementCount > 28) layer.firstElementChild?.remove();
-    const el = document.createElement('span');
-    el.className = big ? 'float-dmg big' : 'float-dmg';
+    const el = this.acquireFx(big ? 'float-dmg big' : 'float-dmg');
     el.textContent = text;
     el.style.color = color;
     el.style.left = `${pos.x}px`;
     el.style.top = `${pos.y}px`;
     layer.appendChild(el);
-    window.setTimeout(() => el.remove(), 760);
+    this.releaseFx(el, 760);
   }
 
   private showCombo(count: number) {
     const layer = $('fx-layer');
-    const el = document.createElement('span');
-    el.className = 'combo-toast';
+    const el = this.acquireFx('combo-toast');
     el.innerHTML = `<strong>${count}</strong><span>连杀</span>`;
     layer.appendChild(el);
-    window.setTimeout(() => el.remove(), 900);
+    this.releaseFx(el, 900);
+  }
+
+  // 浮动文字元素池：命中高峰期避免高频 createElement / GC
+  private fxPool: HTMLSpanElement[] = [];
+
+  private acquireFx(cls: string): HTMLSpanElement {
+    const el = this.fxPool.pop() ?? document.createElement('span');
+    el.className = cls;
+    el.style.cssText = ''; // 清除上一轮残留的行内 left/top/color，避免污染下一次用途的定位
+    return el;
+  }
+
+  private releaseFx(el: HTMLSpanElement, delay: number) {
+    window.setTimeout(() => {
+      el.remove();
+      if (this.fxPool.length < 24) this.fxPool.push(el);
+    }, delay);
   }
 
   private startWave(manual: boolean) {
     if (this.status === 'wave' || this.status === 'won' || this.status === 'lost') return;
-    if (manual && this.status === 'cleared') { this.gold += 12; this.flash('提前出击 +12 金币'); }
+    if (manual && this.status === 'cleared') {
+      this.gold += WAVE_BREAK_BONUS;
+      this.flash(`提前出击 +${WAVE_BREAK_BONUS} 金币`);
+    }
+    if (this.waveIndex + 1 >= this.level.waves.length) return; // 波次已耗尽，防止重复点击溢出计数
     this.waveIndex += 1;
     const wave = this.level.waves[this.waveIndex];
     if (!wave) return;
@@ -966,6 +1065,12 @@ export class Game {
     }
     if (this.paused) return;
 
+    // 胜负已定：冻结波次/单位模拟，仅保留特效与烟雾余韵（结果面板背景仍有动画）
+    if (this.status === 'won' || this.status === 'lost') {
+      this.decayVisuals(sdt);
+      return;
+    }
+
     if (this.status === 'cleared') {
       this.countdown -= sdt;
       if (this.countdown <= 0) this.startWave(false);
@@ -1085,8 +1190,8 @@ export class Game {
         if (p.distance >= p.maxDistance) this.hit(p);
       }
 
-      this.enemies = this.enemies.filter((e) => !e.dead);
-      this.projectiles = this.projectiles.filter((p) => p.alive);
+      this.compact(this.enemies, (e) => !e.dead);
+      this.compact(this.projectiles, (p) => p.alive);
 
       if (this.status === 'wave' && this.schedule.length === 0 && this.enemies.length === 0) {
         if (this.waveIndex + 1 >= this.level.waves.length) {
@@ -1094,19 +1199,21 @@ export class Game {
           this.showResult(true);
         } else {
           this.status = 'cleared';
-          this.countdown = 6;
-          // 通关奖励随关卡成长，保证后期升级炮塔的经济来源
-          this.gold += 20 + this.level.id * 2;
+          this.countdown = WAVE_BREAK_SECONDS;
+          // 清波奖励随关卡成长，保证后期升级炮塔的经济来源
+          this.gold += WAVE_CLEAR_BONUS_BASE + this.level.id * WAVE_CLEAR_BONUS_PER_LEVEL;
         }
       }
     }
 
-    this.effects = this.effects.filter((ef) => {
-      ef.life -= sdt;
-      return ef.life > 0;
-    });
+    this.decayVisuals(sdt);
+  }
 
-    this.particles = this.particles.filter((p) => {
+  /** 特效生命衰减与粒子物理：抽出共用，胜负冻结时同样维持余韵动画 */
+  private decayVisuals(sdt: number) {
+    for (const ef of this.effects) ef.life -= sdt;
+    this.compact(this.effects, (ef) => ef.life > 0);
+    for (const p of this.particles) {
       p.life -= sdt;
       if (!p.smoke) {
         p.x += p.vx * sdt;
@@ -1117,8 +1224,17 @@ export class Game {
         p.vz *= 0.97;
         if (p.z < 0) { p.z = 0; p.vy *= -0.25; }
       }
-      return p.life > 0;
-    });
+    }
+    this.compact(this.particles, (p) => p.life > 0);
+  }
+
+  /** 原地压实数组：避免 filter 产生中间数组，热路径零 GC 分配 */
+  private compact<T>(arr: T[], keep: (item: T) => boolean) {
+    let w = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (keep(arr[i])) arr[w++] = arr[i];
+    }
+    arr.length = w;
   }
 
   private loop = (now: number) => {
@@ -1151,9 +1267,21 @@ export class Game {
     this.view.cinematicFocus(base.x, base.y);
     this.view.shake(win ? 0.05 : 0.18);
     $('result-title').textContent = win ? '防线守住了' : '基地失守';
-    $('result-desc').textContent = win
-      ? `第 ${this.level.id} 关「${this.level.name}」完成，剩余基地生命 ${this.lives}。`
-      : `第 ${this.level.id} 关作战失败，调整部署后再试一次。`;
+    const starsEl = $('result-stars');
+    if (win) {
+      // 解锁下一关并记录最佳星级（按剩余生命比例评定）
+      this.unlocked = Math.max(this.unlocked, Math.min(LEVELS.length, this.level.id + 1));
+      const stars = starsFor(this.lives, this.level.lives);
+      this.stars[this.level.id] = Math.max(this.stars[this.level.id] ?? 0, stars);
+      this.saveProgress();
+      starsEl.hidden = false;
+      starsEl.innerHTML =
+        `<span>${'★'.repeat(stars)}</span><span class="dim">${'★'.repeat(3 - stars)}</span>`;
+      $('result-desc').textContent = `第 ${this.level.id} 关「${this.level.name}」完成，剩余基地生命 ${this.lives}。`;
+    } else {
+      starsEl.hidden = true;
+      $('result-desc').textContent = `第 ${this.level.id} 关作战失败，调整部署后再试一次。`;
+    }
     ($('btn-next') as HTMLButtonElement).style.display = win && this.level.id < LEVELS.length ? '' : 'none';
     $('result').classList.remove('hidden');
     if (win) this.audio.win(); else this.audio.lose();
@@ -1199,25 +1327,50 @@ export class Game {
 
   private syncUpgradeButton() {
     const t = this.selected;
-    if (!t || $('detail-modal').classList.contains('hidden')) return;
-    const up = $('btn-upgrade') as HTMLButtonElement;
+    if (!t || this.el('detail-modal').classList.contains('hidden')) return;
     const cost = this.upgradeCost(t);
+    const key = `${t.id}|${t.level}|${this.gold}`;
+    if (this.uiCache.upgradeKey === key) return; // 选中塔与金币未变则跳过
+    this.uiCache.upgradeKey = key;
+    const up = this.el('btn-upgrade') as HTMLButtonElement;
     up.textContent = t.level >= MAX_LEVEL ? '已满级' : `升级 ${cost}`;
     up.disabled = t.level >= MAX_LEVEL || this.gold < cost;
   }
 
+  /** 下一波兵种组成预告：按兵种聚合数量，如「机甲×3 坦克×6」 */
+  private nextWaveText(): string | null {
+    const wave = this.level.waves[this.waveIndex + 1];
+    if (!wave) return null;
+    const counts = new Map<EnemyType, number>();
+    for (const g of wave.groups) counts.set(g.type, (counts.get(g.type) ?? 0) + g.count);
+    return [...counts.entries()].map(([t, n]) => `${ENEMY_CONFIG[t].name}×${n}`).join(' ');
+  }
+
   private syncUI() {
-    $('stat-level').textContent = String(this.level.id);
-    const goldEl = $('stat-gold');
-    goldEl.textContent = String(this.gold);
-    if (this.lastGold >= 0 && this.gold !== this.lastGold) {
-      goldEl.classList.remove('pop');
-      void goldEl.offsetWidth;
-      goldEl.classList.add('pop');
+    const c = this.uiCache;
+    if (c.level !== this.level.id) {
+      c.level = this.level.id;
+      this.el('stat-level').textContent = String(this.level.id);
     }
-    this.lastGold = this.gold;
-    $('stat-lives').textContent = String(this.lives);
-    $('stat-wave').textContent = `${Math.max(0, this.waveIndex + 1)} / ${this.level.waves.length}`;
+    if (c.gold !== this.gold) {
+      const goldEl = this.el('stat-gold');
+      goldEl.textContent = String(this.gold);
+      if (c.gold >= 0) {
+        goldEl.classList.remove('pop');
+        void goldEl.offsetWidth;
+        goldEl.classList.add('pop');
+      }
+      c.gold = this.gold;
+    }
+    if (c.lives !== this.lives) {
+      this.el('stat-lives').textContent = String(this.lives);
+      c.lives = this.lives;
+    }
+    const waveText = `${Math.max(0, this.waveIndex + 1)} / ${this.level.waves.length}`;
+    if (c.wave !== waveText) {
+      this.el('stat-wave').textContent = waveText;
+      c.wave = waveText;
+    }
 
     const wave = this.level.waves[this.waveIndex];
     const totalEnemies = wave ? wave.groups.reduce((sum, g) => sum + g.count, 0) : 0;
@@ -1230,32 +1383,49 @@ export class Game {
     } else if (this.status === 'lost') {
       progress = this.waveIndex / this.level.waves.length;
     }
-    $('wave-progress-bar').style.width = `${Math.max(0, Math.min(100, progress * 100))}%`;
+    const progressPct = Math.round(Math.max(0, Math.min(100, progress * 100)) * 10) / 10;
+    if (c.progress !== progressPct) {
+      this.el('wave-progress-bar').style.width = `${progressPct}%`;
+      c.progress = progressPct;
+    }
 
-    const hudLabels: Record<string, string> = { ready: '待命', wave: '作战中', cleared: '整备', won: '胜利', lost: '失败' };
-    $('stage-hud').setAttribute('data-state', this.status);
-    $('hud-status').textContent = hudLabels[this.status];
+    const prevStatus = c.status;
+    if (c.status !== this.status) {
+      const hudLabels: Record<string, string> = { ready: '待命', wave: '作战中', cleared: '整备', won: '胜利', lost: '失败' };
+      this.el('stage-hud').setAttribute('data-state', this.status);
+      this.el('hud-status').textContent = hudLabels[this.status];
+      c.status = this.status;
+      c.remaining = -1;
+    }
 
-    const info = $('wave-info');
-    const start = $('btn-start') as HTMLButtonElement;
+    const info = this.el('wave-info');
+    const start = this.el('btn-start') as HTMLButtonElement;
     if (this.status === 'wave') {
-      info.textContent = `第 ${this.waveIndex + 1} 波进行中 · 剩余敌人 ${this.enemies.length + this.schedule.length}`;
-      start.textContent = '作战中';
-      start.disabled = true;
+      const remaining = this.enemies.length + this.schedule.length;
+      if (c.remaining !== remaining) {
+        info.textContent = `第 ${this.waveIndex + 1} 波进行中 · 剩余敌人 ${remaining}`;
+        c.remaining = remaining;
+      }
     } else if (this.status === 'cleared') {
-      info.textContent = `本波清空 · ${Math.ceil(this.countdown)} 秒后自动开始下一波`;
-      start.textContent = '提前开始 +12';
-      start.disabled = false;
-    } else if (this.status === 'won') {
-      info.textContent = '全部波次完成，防线守住了';
-      start.disabled = true;
-    } else if (this.status === 'lost') {
-      info.textContent = '基地失守，作战失败';
-      start.disabled = true;
-    } else {
-      info.textContent = '准备部署，点击「开始波次」';
-      start.textContent = '开始波次';
-      start.disabled = false;
+      // 倒计时逐秒变化，保持每帧刷新（textContent 同值写入代价可忽略）
+      const next = this.nextWaveText();
+      info.textContent = next
+        ? `本波清空 · ${Math.ceil(this.countdown)} 秒后开始 · ${next}`
+        : `本波清空 · ${Math.ceil(this.countdown)} 秒后自动开始下一波`;
+    } else if (prevStatus !== this.status) {
+      if (this.status === 'won') info.textContent = '全部波次完成，防线守住了';
+      else if (this.status === 'lost') info.textContent = '基地失守，作战失败';
+      else {
+        const next = this.nextWaveText();
+        info.textContent = next ? `准备部署，点击「开始波次」 · ${next}` : '准备部署，点击「开始波次」';
+      }
+    }
+    if (c.startState !== this.status) {
+      c.startState = this.status;
+      if (this.status === 'wave') { start.textContent = '作战中'; start.disabled = true; }
+      else if (this.status === 'cleared') { start.textContent = `提前开始 +${WAVE_BREAK_BONUS}`; start.disabled = false; }
+      else if (this.status === 'won' || this.status === 'lost') { start.disabled = true; }
+      else { start.textContent = '开始波次'; start.disabled = false; }
     }
     this.syncTowerList();
     this.syncUpgradeButton();
