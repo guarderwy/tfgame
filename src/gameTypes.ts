@@ -1,4 +1,4 @@
-import type { EnemyType, PathKind, Point, SpawnGroup, TowerType } from './types';
+import type { EnemyType, PathKind, Point, SpawnGroup, TargetMode, TowerType } from './types';
 
 export interface PathData {
   tiles: number[][];
@@ -9,6 +9,7 @@ export interface PathData {
 export interface Tower {
   id: number;
   type: TowerType;
+  targetMode: TargetMode;
   level: number;
   tx: number;
   ty: number;

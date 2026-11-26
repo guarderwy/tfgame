@@ -1,6 +1,8 @@
 export type EnemyType = 'infantry' | 'truck' | 'tank' | 'plane' | 'ship' | 'mech' | 'drone' | 'hovercraft' | 'strider' | 'bomber' | 'helicopter' | 'destroyer' | 'submarine';
 export type TowerType = 'machinegun' | 'howitzer' | 'aa' | 'coastal' | 'laser' | 'flak' | 'railgun' | 'tesla' | 'mine';
 export type PathKind = 'ground' | 'water' | 'air';
+export type TargetMode = 'first' | 'close' | 'weak' | 'strong' | 'bounty';
+export type TowerPattern = 'stripe' | 'chevron' | 'dot' | 'grid' | 'warning' | 'circuit';
 
 export interface Point {
   x: number;
@@ -29,6 +31,9 @@ export interface TowerConfig {
   range: number;
   fireRate: number;
   color: string;
+  body: string;
+  secondary: string;
+  pattern: TowerPattern;
   targets: PathKind[];
   splash: number;
   projectileSpeed: number;

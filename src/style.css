@@ -618,6 +618,13 @@ html[data-screen="wide"] canvas { aspect-ratio: 16 / 9; }
 .info-row strong { font-variant-numeric: tabular-nums; color: var(--text); }
 .info-desc { margin: 12px 0 0; font-size: 11px; color: var(--muted); line-height: 1.7; }
 .info-desc.counter { margin-top: 14px; padding: 10px; color: #9fd0a4; background: var(--teal-soft); border-left: 2px solid var(--teal); border-radius: 0 6px 6px 0; }
+.info-priority { margin-top: 14px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(0, 0, 0, 0.14); }
+.priority-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 11.5px; color: var(--text); }
+.priority-head small { font-size: 9.5px; color: var(--muted); }
+.priority-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.priority-btn { padding: 5px 10px; border: 1px solid var(--line-2); border-radius: 7px; background: rgba(255, 255, 255, 0.03); color: var(--text-dim); font-size: 10.5px; cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
+.priority-btn:hover { border-color: var(--teal); color: var(--text); }
+.priority-btn.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-2); font-weight: 700; }
 .info-actions { display: flex; gap: 8px; margin-top: 14px; }
 .info-actions .btn { flex: 1; padding: 9px 6px; font-size: 11.5px; }
 #btn-upgrade { border-color: var(--accent-line); color: var(--accent-2); }

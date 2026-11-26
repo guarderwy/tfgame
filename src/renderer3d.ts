@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { BASE_TILE, COLS, ROWS, TILE, TOWER_CONFIG } from './config';
 import { WeatherSystem } from './weather';
-import type { DecoKind, EnemyType, LevelTheme, Point, TowerType } from './types';
+import type { DecoKind, EnemyType, LevelTheme, Point, TowerPattern, TowerType } from './types';
 import type { Effect, Enemy, NavalMine, Particle, PathData, Projectile, Tower } from './gameTypes';
 
 export interface RenderState {
@@ -221,6 +221,66 @@ function metalMat(color: number | string, metalness = 0.6, roughness = 0.4) {
   return new THREE.MeshStandardMaterial({ color, metalness, roughness });
 }
 
+const patternTextures = new Map<string, THREE.CanvasTexture>();
+function patternTexture(pattern: TowerPattern, body: string, secondary: string) {
+  const cacheKey = `${pattern}|${body}|${secondary}`;
+  const cached = patternTextures.get(cacheKey);
+  if (cached) return cached;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = body;
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.strokeStyle = secondary;
+  ctx.fillStyle = secondary;
+  ctx.lineWidth = 12;
+  switch (pattern) {
+    case 'stripe':
+      for (let i = -128; i < 256; i += 32) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + 128, 128); ctx.stroke();
+      }
+      break;
+    case 'chevron':
+      for (let y = -32; y < 160; y += 32) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(64, y + 22); ctx.lineTo(128, y); ctx.stroke();
+      }
+      break;
+    case 'dot':
+      for (let x = 16; x < 128; x += 32) {
+        for (let y = 16; y < 128; y += 32) {
+          ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      break;
+    case 'grid':
+      ctx.lineWidth = 8;
+      for (let i = 0; i <= 128; i += 32) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 128); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(128, i); ctx.stroke();
+      }
+      break;
+    case 'warning':
+      ctx.lineWidth = 18;
+      for (let i = -128; i < 256; i += 48) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + 128, 128); ctx.stroke();
+      }
+      break;
+    case 'circuit':
+      ctx.lineWidth = 6;
+      for (let y = 16; y < 128; y += 32) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(40, y); ctx.lineTo(56, y + 16); ctx.lineTo(128, y + 16); ctx.stroke();
+        ctx.beginPath(); ctx.arc(36, y, 5, 0, Math.PI * 2); ctx.fill();
+      }
+      break;
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1.4, 1.4);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  patternTextures.set(cacheKey, tex);
+  return tex;
+}
+
 function addEdges(mesh: THREE.Mesh, opacity = 0.45) {
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(mesh.geometry, 32),
@@ -361,6 +421,9 @@ export class Renderer3D {
   private clock = 0;
   private zoom = 1;
   private cameraAngle = 0;
+  private nightFactor = 1;
+  private highContrast = false;
+  private currentTheme: LevelTheme | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -374,7 +437,7 @@ export class Renderer3D {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.VSMShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.75;
+    this.renderer.toneMappingExposure = 0.95;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.scene.environmentIntensity = 0.18;
 
@@ -459,6 +522,22 @@ export class Renderer3D {
   /** 注入雷声回调（由 Game 层接 AudioKit，天气系统不持有音频引用） */
   setThunderSound(cb: () => void) {
     this.weather.setThunderCallback(cb);
+  }
+
+  private get accentIntensity() {
+    return (this.highContrast ? 2.15 : 1.6) * this.nightFactor;
+  }
+
+  setHighContrast(on: boolean) {
+    this.highContrast = on;
+    this.applyContrast();
+  }
+
+  private applyContrast() {
+    const factor = this.highContrast ? 0.9 : 1;
+    this.hemi.intensity = (this.currentTheme?.ambient ?? 1.05) * factor;
+    this.sun.intensity = (this.currentTheme?.sun ?? 1.15) * factor;
+    this.renderer.toneMappingExposure = this.highContrast ? 1.05 : 0.95;
   }
 
   destroy() {
@@ -577,11 +656,12 @@ export class Renderer3D {
     this.waterMat.color.set('#ffffff');
     this.waterMat.emissive.set(theme.water).multiplyScalar(0.3);
     this.waterMat.needsUpdate = true;
-    this.hemi.intensity = theme.ambient;
+    this.currentTheme = theme;
+    this.nightFactor = theme.night ? 1.3 : theme.ambient < 0.9 ? 1.15 : 1;
     this.hemi.color.set(theme.night ? '#8ba1bd' : '#cfe0b8');
     this.hemi.groundColor.set(theme.night ? '#131a1c' : '#28331f');
-    this.sun.intensity = theme.sun;
     this.sun.color.set(theme.night ? '#a9c2e0' : '#ffe9c4');
+    this.applyContrast();
     this.weather.applyTheme(theme);
 
     const dummy = new THREE.Object3D();
@@ -968,12 +1048,13 @@ export class Renderer3D {
     return g;
   }
 
-  private createMineLayerMesh(color: string): THREE.Group {
+  private createMineLayerMesh(color: string, type: TowerType): THREE.Group {
     const g = new THREE.Group();
-    const steel = mat('#4a545c', { metalness: 0.55, roughness: 0.5 });
-    const dark = mat('#242c33', { metalness: 0.4, roughness: 0.6 });
+    const cfg = TOWER_CONFIG[type];
+    const steel = mat('#ffffff', { metalness: 0.42, roughness: 0.55, map: patternTexture(cfg.pattern, cfg.body, cfg.secondary) });
+    const dark = mat('#596154', { metalness: 0.4, roughness: 0.58 });
     const warn = mat('#e9b23c');
-    const glow = mat(color, { emissive: new THREE.Color(color), emissiveIntensity: 0.9 });
+    const glow = glowMat(color, 1);
 
     // 双层六角基座
     const foot = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.5, 0.1, 6), dark));
@@ -1048,10 +1129,11 @@ export class Renderer3D {
     beacon.position.set(0, 0.24, -0.16);
     pivot.add(beacon);
 
+    const pipMat = glowMat('#ffffff', 0.9);
     const pips: THREE.Mesh[] = [];
     for (let i = 0; i < 3; i++) {
-      const pip = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), mat('#fff1c8'));
-      pip.position.set(-0.14 + i * 0.14, 0.46, 0.16);
+      const pip = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 6), pipMat);
+      pip.position.set(-0.12 + i * 0.12, 0.1, 0.5);
       g.add(pip);
       pips.push(pip);
     }
@@ -1075,11 +1157,21 @@ export class Renderer3D {
     return crown;
   }
 
-  private decorateTower(g: THREE.Group, t: Tower, pivot: THREE.Group, color: string): THREE.Mesh[] {
-    const steel = metalMat('#4c5147', 0.78, 0.34);
-    const dark = metalMat('#252922', 0.55, 0.5);
-    const glow = glowMat(color, 1.15);
+  private createTower(t: Tower): THREE.Group {
+    const cfg = TOWER_CONFIG[t.type];
+    if (t.type === 'mine') return this.createMineLayerMesh(cfg.color, t.type);
+    const g = new THREE.Group();
+    const accent = cfg.color;
+    const armor = new THREE.MeshStandardMaterial({
+      color: '#ffffff', map: patternTexture(cfg.pattern, cfg.body, cfg.secondary),
+      metalness: 0.42, roughness: 0.55,
+    });
+    const trim = metalMat(cfg.secondary, 0.5, 0.5);
+    const dark = metalMat('#596154', 0.4, 0.58);
+    const glow = glowMat(accent, 1);
+    const lens = glowMat(accent, 1.15);
     const pulse: THREE.Mesh[] = [];
+
     const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
       const m = shadow(new THREE.Mesh(geo, material));
       m.position.set(x, y, z);
@@ -1087,132 +1179,136 @@ export class Renderer3D {
       parent.add(m);
       return m;
     };
+    const box = (parent: THREE.Object3D, w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) =>
+      add(parent, new THREE.BoxGeometry(w, h, d), material, x, y, z, rx, ry, rz);
+    const cyl = (parent: THREE.Object3D, rt: number, rb: number, h: number, seg: number, material: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) =>
+      add(parent, new THREE.CylinderGeometry(rt, rb, h, seg), material, x, y, z, rx, ry, rz);
+    const tor = (parent: THREE.Object3D, r: number, tube: number, radial: number, tubular: number, material: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) =>
+      add(parent, new THREE.TorusGeometry(r, tube, radial, tubular), material, x, y, z, rx, ry, rz);
+    const sph = (parent: THREE.Object3D, r: number, material: THREE.Material, x: number, y: number, z: number) =>
+      add(parent, new THREE.SphereGeometry(r, 10, 8), material, x, y, z);
+    const cone = (parent: THREE.Object3D, r: number, h: number, seg: number, material: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) =>
+      add(parent, new THREE.ConeGeometry(r, h, seg), material, x, y, z, rx, ry, rz);
 
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      add(g, new THREE.CylinderGeometry(0.026, 0.026, 0.035, 6), steel, Math.cos(a) * 0.35, 0.28, Math.sin(a) * 0.35);
+    // 共用底盘：八边形装甲 + 发光识别环，所有武器保持同一轮廓语言
+    add(g, new THREE.CylinderGeometry(0.5, 0.54, 0.1, 8), dark, 0, 0.07, 0);
+    addEdges(add(g, new THREE.CylinderGeometry(0.42, 0.48, 0.16, 8), armor, 0, 0.19, 0), 0.32);
+    add(g, new THREE.CylinderGeometry(0.35, 0.35, 0.05, 8), trim, 0, 0.29, 0);
+    tor(g, 0.42, 0.035, 5, 16, glow, 0, 0.27, 0, Math.PI / 2);
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + i * Math.PI / 2;
+      cyl(g, 0.028, 0.028, 0.05, 6, trim, Math.cos(a) * 0.38, 0.31, Math.sin(a) * 0.38);
     }
-    for (let i = 0; i < t.level; i++) {
-      add(g, new THREE.BoxGeometry(0.15, 0.11, 0.05), steel, -0.2 + i * 0.2, 0.2, 0.4);
-    }
-    g.children.slice(0, 3).forEach((child) => {
-      const mesh = child as THREE.Mesh;
-      if (mesh.isMesh && mesh.geometry) addEdges(mesh, 0.38);
-    });
+    addEdges(add(g, new THREE.CylinderGeometry(0.3, 0.35, 0.24, 8), armor, 0, 0.43, 0), 0.3);
+    box(g, 0.46, 0.16, 0.14, trim, 0, 0.44, 0.28, -0.16);
+    box(g, 0.22, 0.1, 0.2, dark, 0, 0.57, -0.22);
+    const pipMat = glowMat('#ffffff', 0.9);
+    const pips: THREE.Mesh[] = [];
+    for (let i = 0; i < 3; i++) pips.push(sph(g, 0.028, pipMat, -0.12 + i * 0.12, 0.1, 0.5));
+
+    const pivot = new THREE.Group();
+    pivot.position.y = 0.46;
+    g.add(pivot);
 
     switch (t.type) {
-      case 'machinegun':
+      case 'machinegun': {
         [-0.12, 0.12].forEach((x) => {
-          add(pivot, new THREE.CylinderGeometry(0.03, 0.035, 0.62, 8), dark, x, 0.02, 0.36, Math.PI / 2);
+          cyl(pivot, 0.032, 0.038, 0.72, 8, trim, x, 0.02, 0.36, Math.PI / 2);
+          cyl(pivot, 0.05, 0.05, 0.12, 8, armor, x, 0.02, 0.68, Math.PI / 2);
+          pulse.push(sph(pivot, 0.035, glow, x, 0.02, 0.76));
         });
-        add(pivot, new THREE.BoxGeometry(0.22, 0.18, 0.24), steel, -0.34, -0.02, 0);
-        pulse.push(add(pivot, new THREE.SphereGeometry(0.045, 8, 6), glow, 0, 0.02, 0.7));
+        box(pivot, 0.2, 0.22, 0.3, armor, -0.3, -0.04, 0.02);
+        box(pivot, 0.36, 0.06, 0.24, trim, 0, 0.18, 0.18, -0.2);
         break;
-      case 'howitzer':
-        add(pivot, new THREE.CylinderGeometry(0.135, 0.135, 0.1, 10), steel, 0, 0, 0.82, Math.PI / 2);
-        add(pivot, new THREE.TorusGeometry(0.13, 0.025, 6, 12), dark, 0, 0, 0.88, 0, 0, 0);
-        add(pivot, new THREE.CylinderGeometry(0.12, 0.14, 0.28, 8), steel, 0, 0, 0.18, Math.PI / 2);
-        pulse.push(add(pivot, new THREE.BoxGeometry(0.06, 0.04, 0.3), glow, 0, 0.16, 0.42));
-        break;
-      case 'aa':
-        [-0.13, 0.13].forEach((x) => add(pivot, new THREE.CylinderGeometry(0.035, 0.04, 0.7, 8), dark, x, 0.06, 0.38, Math.PI / 2 - 0.28));
-        add(g, new THREE.TorusGeometry(0.16, 0.018, 5, 16), steel, 0.3, 0.72, -0.12, Math.PI / 2 - 0.4);
-        pulse.push(add(g, new THREE.SphereGeometry(0.05, 8, 6), glow, 0.3, 0.72, -0.12));
-        break;
-      case 'coastal':
-        add(pivot, new THREE.BoxGeometry(0.62, 0.34, 0.06), steel, 0, 0.02, 0.22, -0.18);
-        add(pivot, new THREE.CylinderGeometry(0.14, 0.14, 0.14, 10), dark, 0, 0, 0.8, Math.PI / 2);
-        add(g, new THREE.BoxGeometry(0.3, 0.08, 0.1), steel, 0, 0.62, -0.06);
-        pulse.push(add(g, new THREE.SphereGeometry(0.04, 8, 6), glow, 0, 0.68, -0.06));
-        break;
-      case 'laser':
-        [0.28, 0.52, 0.76].forEach((z) => pulse.push(add(pivot, new THREE.TorusGeometry(0.12, 0.022, 6, 16), glow, 0, 0, z, 0, 0, 0)));
-        add(pivot, new THREE.BoxGeometry(0.18, 0.18, 0.3), dark, 0, 0, -0.08);
-        break;
-      case 'flak':
-        add(pivot, new THREE.CylinderGeometry(0.05, 0.055, 0.66, 8), dark, 0, 0, 0.4, Math.PI / 2);
-        add(pivot, new THREE.CylinderGeometry(0.16, 0.16, 0.14, 12), steel, -0.32, -0.02, 0, 0, 0, Math.PI / 2);
-        pulse.push(add(pivot, new THREE.TorusGeometry(0.2, 0.02, 6, 18), glow, 0, 0, 0.72));
-        break;
-      case 'railgun':
-        [0.24, 0.48, 0.72].forEach((z) => {
-          add(pivot, new THREE.TorusGeometry(0.2, 0.03, 6, 16), steel, 0, 0, z);
-          pulse.push(add(pivot, new THREE.BoxGeometry(0.07, 0.03, 0.1), glow, -0.16, 0, z));
-          pulse.push(add(pivot, new THREE.BoxGeometry(0.07, 0.03, 0.1), glow, 0.16, 0, z));
-        });
-        add(pivot, new THREE.BoxGeometry(0.46, 0.22, 0.34), dark, 0, 0, -0.18);
-        break;
-      case 'tesla':
-        pulse.push(add(g, new THREE.TorusGeometry(0.24, 0.016, 5, 20), glow, 0, 0.72, 0, Math.PI / 2));
-        add(g, new THREE.CylinderGeometry(0.12, 0.16, 0.22, 8), dark, 0, 0.16, 0);
-        break;
-    }
-    return pulse;
-  }
-
-  private createTower(t: Tower): THREE.Group {
-    const cfg = TOWER_CONFIG[t.type];
-    if (t.type === 'mine') return this.createMineLayerMesh(cfg.color);
-    const g = new THREE.Group();
-    const base = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.42, 0.25, 12), mat('#2b3327')));
-    base.position.y = 0.15;
-    const turret = shadow(new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.3, 0.52), mat(cfg.color)));
-    turret.position.y = 0.39;
-    const pivot = new THREE.Group();
-    pivot.position.y = 0.4;
-    const barrelLen = t.type === 'railgun' ? 1.1 : t.type === 'howitzer' ? 0.85 : t.type === 'flak' ? 0.62 : 0.7;
-    const barrel = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.095, barrelLen, 8), mat('#3a3a32')));
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.z = barrelLen * 0.52;
-    if (t.type === 'howitzer') {
-      const muzzle = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.14, 8), mat(cfg.color)));
-      muzzle.rotation.x = Math.PI / 2;
-      muzzle.position.z = barrelLen;
-      pivot.add(muzzle);
-    }
-    if (t.type === 'flak') {
-      [-0.18, 0.18].forEach((x) => {
-        const side = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, barrelLen * 0.85, 6), mat('#3a3a32')));
-        side.rotation.x = Math.PI / 2;
-        side.position.set(x, 0, barrelLen * 0.44);
-        pivot.add(side);
-      });
-    }
-    if (t.type === 'railgun') {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, barrelLen * 1.15), mat(cfg.color, { emissive: new THREE.Color(cfg.color), emissiveIntensity: 0.5 }));
-      [-0.16, 0.16].forEach((x) => {
-        const r = rail.clone();
-        r.position.set(x, 0, barrelLen * 0.55);
-        pivot.add(r);
-      });
-    }
-    if (t.type === 'laser') {
-      const emitter = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), mat(cfg.color, { emissive: new THREE.Color(cfg.color), emissiveIntensity: 0.9 }));
-      emitter.position.z = barrelLen * 0.92;
-      pivot.add(emitter);
-    }
-    if (t.type === 'tesla') {
-      for (let i = 0; i < 3; i++) {
-        const coil = new THREE.Mesh(new THREE.TorusGeometry(0.19 - i * 0.03, 0.025, 6, 12), mat(cfg.color, { emissive: new THREE.Color(cfg.color), emissiveIntensity: 0.55 }));
-        coil.rotation.x = Math.PI / 2;
-        coil.position.set(0, 0.3 + i * 0.14, 0);
-        g.add(coil);
       }
-      const orb = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), mat('#e6d4ff', { emissive: new THREE.Color(cfg.color), emissiveIntensity: 1 }));
-      orb.position.set(0, 0.7, 0);
-      g.add(orb);
+      case 'howitzer': {
+        cyl(pivot, 0.115, 0.135, 0.82, 10, trim, 0, 0.02, 0.4, Math.PI / 2);
+        cyl(pivot, 0.15, 0.15, 0.16, 10, armor, 0, 0.02, 0.78, Math.PI / 2);
+        pulse.push(tor(pivot, 0.15, 0.025, 6, 14, glow, 0, 0.02, 0.86));
+        [-0.22, 0.22].forEach((x) => box(pivot, 0.05, 0.16, 0.42, armor, x, 0.04, 0.1, -0.12));
+        box(pivot, 0.34, 0.18, 0.3, dark, 0, 0, -0.16);
+        pulse.push(box(pivot, 0.05, 0.03, 0.3, glow, 0, 0.18, 0.34));
+        break;
+      }
+      case 'aa': {
+        [-0.14, 0.14].forEach((x) => {
+          cyl(pivot, 0.033, 0.04, 0.78, 8, trim, x, 0.1, 0.34, Math.PI / 2 - 0.3);
+          cyl(pivot, 0.052, 0.052, 0.1, 8, armor, x, 0.34, 0.68, Math.PI / 2 - 0.3);
+        });
+        box(pivot, 0.42, 0.1, 0.14, armor, 0, 0.02, 0.02);
+        [-0.34, 0.34].forEach((x) => cyl(g, 0.14, 0.14, 0.1, 10, dark, x, 0.43, -0.06, 0, 0, Math.PI / 2));
+        cyl(g, 0.02, 0.02, 0.18, 6, trim, 0, 0.61, -0.18);
+        add(g, new THREE.SphereGeometry(0.18, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.42), armor, 0, 0.72, -0.18, Math.PI / 2.6);
+        pulse.push(sph(g, 0.045, glow, 0, 0.79, -0.18));
+        break;
+      }
+      case 'coastal': {
+        cyl(pivot, 0.075, 0.105, 1.05, 10, trim, 0, 0.02, 0.5, Math.PI / 2);
+        cyl(pivot, 0.11, 0.11, 0.18, 10, armor, 0, 0.02, 1, Math.PI / 2);
+        pulse.push(tor(pivot, 0.115, 0.022, 6, 14, glow, 0, 0.02, 1.08));
+        box(pivot, 0.6, 0.36, 0.05, armor, 0, 0.05, 0.18, -0.16);
+        pulse.push(box(pivot, 0.62, 0.05, 0.08, glow, 0, 0.24, 0.2, -0.16));
+        [-0.16, 0.16].forEach((x) => cyl(pivot, 0.03, 0.03, 0.5, 6, armor, x, -0.1, 0.28, Math.PI / 2));
+        box(g, 0.38, 0.06, 0.08, trim, 0, 0.66, -0.06);
+        [-0.16, 0.16].forEach((x) => sph(g, 0.035, lens, x, 0.68, -0.06));
+        break;
+      }
+      case 'laser': {
+        box(pivot, 0.08, 0.08, 0.7, trim, 0, 0, 0.34);
+        [-0.16, 0.16].forEach((x) => {
+          box(pivot, 0.05, 0.16, 0.34, armor, x, 0, 0.18, 0, 0, x > 0 ? -0.12 : 0.12);
+          pulse.push(box(pivot, 0.03, 0.1, 0.28, glow, x, 0, 0.2));
+        });
+        cyl(pivot, 0.14, 0.16, 0.2, 10, trim, 0, 0, 0.7, Math.PI / 2);
+        pulse.push(sph(pivot, 0.1, glow, 0, 0, 0.82));
+        pulse.push(tor(pivot, 0.14, 0.02, 6, 16, glow, 0, 0, 0.78));
+        cyl(pivot, 0.12, 0.12, 0.22, 8, dark, 0, 0, -0.12, Math.PI / 2);
+        break;
+      }
+      case 'flak': {
+        [-0.13, 0, 0.13].forEach((x) => {
+          cyl(pivot, 0.032, 0.04, 0.66, 8, trim, x, 0.02, 0.32, Math.PI / 2);
+          cyl(pivot, 0.048, 0.048, 0.1, 8, armor, x, 0.02, 0.62, Math.PI / 2);
+        });
+        pulse.push(tor(pivot, 0.2, 0.025, 6, 18, glow, 0, 0.02, 0.66));
+        cyl(pivot, 0.17, 0.17, 0.12, 12, dark, -0.3, -0.02, 0, 0, 0, Math.PI / 2);
+        tor(pivot, 0.18, 0.02, 6, 16, armor, -0.36, -0.02, 0, 0, Math.PI / 2);
+        break;
+      }
+      case 'railgun': {
+        [-0.16, 0.16].forEach((x) => {
+          box(pivot, 0.05, 0.06, 1.2, armor, x, 0, 0.55);
+          pulse.push(box(pivot, 0.025, 0.025, 1.16, glow, x, 0.05, 0.55));
+        });
+        [0.22, 0.5, 0.78].forEach((z) => {
+          tor(pivot, 0.19, 0.03, 6, 14, trim, 0, 0, z);
+          pulse.push(box(pivot, 0.4, 0.04, 0.05, glow, 0, -0.06, z));
+        });
+        box(pivot, 0.5, 0.24, 0.36, dark, 0, 0, -0.2);
+        pulse.push(box(pivot, 0.07, 0.07, 1.1, glow, 0, 0, 0.55));
+        box(pivot, 0.42, 0.06, 0.08, armor, 0, 0, 1.12);
+        break;
+      }
+      case 'tesla': {
+        cyl(g, 0.16, 0.2, 0.16, 8, dark, 0, 0.57, 0);
+        [0.2, 0.38, 0.56].forEach((y, i) => {
+          pulse.push(tor(pivot, 0.2 - i * 0.02, 0.03, 6, 16, glow, 0, y, 0, Math.PI / 2));
+          cyl(pivot, 0.05, 0.05, 0.16, 6, trim, 0, y - 0.08, 0);
+        });
+        pulse.push(sph(pivot, 0.12, glow, 0, 0.76, 0));
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2;
+          cone(pivot, 0.035, 0.16, 5, armor, Math.cos(a) * 0.16, 0.68, Math.sin(a) * 0.16, 0, 0, -a);
+        }
+        pulse.push(tor(pivot, 0.22, 0.018, 5, 18, glow, 0, 0.8, 0, Math.PI / 2));
+        break;
+      }
     }
-    pivot.add(barrel);
-    g.add(base, turret, pivot);
 
-    const pips: THREE.Mesh[] = [];
-    for (let i = 0; i < 3; i++) {
-      const pip = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), mat('#fff1c8'));
-      pip.position.set(-0.16 + i * 0.16, 0.29, 0.42);
-      g.add(pip);
-      pips.push(pip);
-    }
-    const pulse = this.decorateTower(g, t, pivot, cfg.color);
+    pulse.forEach((part) => {
+      const material = part.material as THREE.MeshStandardMaterial;
+      if (material.emissiveIntensity !== undefined) part.userData.baseEmissive = material.emissiveIntensity;
+    });
     g.userData = { pivot, pips, pulse };
     return g;
   }
@@ -1747,7 +1843,10 @@ export class Renderer3D {
         const wave = Math.sin(this.clock * 5 + t.id * 0.7 + i * 0.9);
         part.scale.setScalar(1 + wave * 0.14);
         const material = part.material as THREE.MeshStandardMaterial;
-        if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 1 + wave * 0.45;
+        if (material.emissiveIntensity !== undefined) {
+          const base = (part.userData.baseEmissive as number | undefined) ?? 1;
+          material.emissiveIntensity = this.accentIntensity * base * (1 + wave * 0.3);
+        }
       });
     });
   }
@@ -1875,61 +1974,93 @@ export class Renderer3D {
       color: c, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false,
     });
     const group = new THREE.Group();
+    const add = (geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0) => {
+      const m = new THREE.Mesh(geo, material);
+      m.position.set(x, y, z);
+      group.add(m);
+      return m;
+    };
+    const ring = (radius: number, tube: number, material: THREE.Material, y: number) => {
+      const m = add(new THREE.TorusGeometry(radius, tube, 6, 14), material, 0, y, 0);
+      m.rotation.x = Math.PI / 2;
+      return m;
+    };
+    const tail = (radius: number, length: number, material: THREE.Material, y: number) => {
+      const m = add(new THREE.ConeGeometry(radius, length, 10), material, 0, y, 0);
+      m.rotation.x = Math.PI;
+      return m;
+    };
 
-    if (p.type === 'laser' || p.type === 'tesla') {
-      const layers: [number, string, number][] = p.type === 'laser'
-        ? [[0.022, '#ffffff', 1], [0.055, color, 0.8], [0.12, color, 0.3]]
-        : [[0.026, '#ffffff', 1], [0.07, color, 0.75], [0.13, color, 0.35]];
-      layers.forEach(([radius, layerColor, opacity]) => {
-        group.add(new THREE.Mesh(
-          new THREE.CylinderGeometry(radius, radius, 1, 10),
-          additive(layerColor, opacity),
-        ));
-      });
+    // 激光：细相干光束 + 两侧约束线，呼应塔上的开放式发射架
+    if (p.type === 'laser') {
+      // 向目标端收束的聚焦激光：细白核 + 极薄色晕 + 两条近身约束线
+      const layers: [number, number, string, number][] = [
+        [0.003, 0.007, '#ffffff', 1],
+        [0.007, 0.013, color, 0.9],
+        [0.013, 0.022, color, 0.18],
+      ];
+      layers.forEach(([top, bottom, c, o]) =>
+        add(new THREE.CylinderGeometry(top, bottom, 1, 6), additive(c, o)));
       return group;
     }
 
+    // 电弧：折线闪电替代直光束，与线圈塔的锯齿能量呼应
+    if (p.type === 'tesla') {
+      add(new THREE.CylinderGeometry(0.075, 0.075, 1, 8), additive(color, 0.22));
+      const pts = [0, 0.2, 0.4, 0.6, 0.8, 1].map((y, i) =>
+        new THREE.Vector3(i % 2 ? 0.045 : -0.045, y - 0.5, i % 3 === 1 ? 0.03 : -0.03));
+      for (let i = 0; i < pts.length - 1; i++) {
+        const dir = new THREE.Vector3().subVectors(pts[i + 1], pts[i]);
+        const len = dir.length();
+        const mid = pts[i].clone().add(pts[i + 1]).multiplyScalar(0.5);
+        const core = add(new THREE.CylinderGeometry(0.014, 0.014, len, 6), additive('#ffffff', 1));
+        core.position.copy(mid);
+        core.quaternion.setFromUnitVectors(UP, dir.normalize());
+        const halo = add(new THREE.CylinderGeometry(0.03, 0.03, len, 6), additive(color, 0.6));
+        halo.position.copy(mid);
+        halo.quaternion.copy(core.quaternion);
+      }
+      pts.forEach((pt) => add(new THREE.SphereGeometry(0.028, 6, 5), additive(color, 0.7)).position.copy(pt));
+      return group;
+    }
+
+    // 磁轨弹：双轨约束 + 磁环 + 锥形尾焰，对应双轨炮的轮廓
     if (p.type === 'railgun') {
-      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.26, 4, 10), additive('#ffffff', 1)));
-      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.32, 4, 10), additive(color, 0.5)));
-      [0.08, 0.2].forEach((y) => {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.018, 6, 14), additive(color, 0.75));
-        ring.position.y = y;
-        group.add(ring);
-      });
-      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.42, 10), additive(color, 0.4));
-      tail.rotation.x = Math.PI;
-      tail.position.y = -0.34;
-      group.add(tail);
+      add(new THREE.CapsuleGeometry(0.03, 0.3, 4, 10), additive('#ffffff', 1));
+      add(new THREE.CapsuleGeometry(0.085, 0.34, 4, 10), additive(color, 0.5));
+      [-0.07, 0.07].forEach((x) => add(new THREE.BoxGeometry(0.016, 0.5, 0.016), additive('#ffffff', 0.9), x));
+      [0.06, 0.2].forEach((y) => ring(0.11, 0.018, additive(color, 0.75), y));
+      tail(0.08, 0.42, additive(color, 0.4), -0.34);
       return group;
     }
 
+    // 机枪/防空：细曳光弹 + 亮弹头 + 收束尾迹
     if (p.type === 'machinegun' || p.type === 'aa') {
-      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.18, 4, 8), additive('#fff8d8', 1)));
-      group.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.22, 4, 8), additive(color, 0.45)));
-      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.36, 8), additive(color, 0.35));
-      tail.rotation.x = Math.PI;
-      tail.position.y = -0.28;
-      group.add(tail);
+      const nose = add(new THREE.ConeGeometry(0.024, 0.12, 8), additive('#fff8d8', 1), 0, 0.13);
+      nose.rotation.x = 0;
+      add(new THREE.CapsuleGeometry(0.026, 0.18, 4, 8), additive('#ffffff', 0.95));
+      add(new THREE.CapsuleGeometry(0.065, 0.22, 4, 8), additive(color, 0.45));
+      tail(0.05, 0.36, additive(color, 0.35), -0.28);
       return group;
     }
 
-    const radius = p.type === 'coastal' ? 0.15 : p.type === 'flak' ? 0.14 : 0.12;
-    group.add(new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 9), new THREE.MeshStandardMaterial({
-      color, emissive: new THREE.Color(color), emissiveIntensity: 0.6, metalness: 0.55, roughness: 0.3,
-    })));
-    group.add(new THREE.Mesh(new THREE.SphereGeometry(radius * 1.7, 10, 8), additive(color, 0.28)));
-    group.add(new THREE.Mesh(new THREE.TorusGeometry(radius * 1.25, 0.018, 5, 14), additive('#ffffff', 0.8)));
-    const tail = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.8, 0.46, 9), additive(color, 0.42));
-    tail.rotation.x = Math.PI;
-    tail.position.y = -0.34;
-    group.add(tail);
-    for (let i = 0; i < 4; i++) {
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.18, radius * 1.4), additive(color, 0.6));
-      fin.rotation.y = (i / 4) * Math.PI * 2;
-      fin.position.y = -0.16;
-      group.add(fin);
+    // 重炮弹：金属弹芯 + 尖头 + 弹带 + 尾翼，岸防炮更大、防空爆破炮带爆环
+    const shell = p.type === 'coastal' ? { r: 0.16, len: 0.38, seg: 10, fins: 6 }
+      : p.type === 'flak' ? { r: 0.13, len: 0.3, seg: 8, fins: 4 }
+      : { r: 0.12, len: 0.32, seg: 8, fins: 4 };
+    add(new THREE.CapsuleGeometry(shell.r * 0.68, shell.len * 0.5, 4, shell.seg), new THREE.MeshStandardMaterial({
+      color, emissive: new THREE.Color(color), emissiveIntensity: 0.8, metalness: 0.62, roughness: 0.3,
+    }));
+    const nose = add(new THREE.ConeGeometry(shell.r * 0.68, shell.r * 1.4, shell.seg), additive('#ffffff', 0.95), 0, shell.len * 0.42 + shell.r * 0.35);
+    nose.rotation.x = 0;
+    ring(shell.r * 0.86, 0.018, additive('#ffffff', 0.85), shell.len * 0.08);
+    add(new THREE.SphereGeometry(shell.r * 1.6, 10, 8), additive(color, 0.26));
+    tail(shell.r * 0.75, 0.42, additive(color, 0.42), -shell.len * 0.5 - 0.16);
+    for (let i = 0; i < shell.fins; i++) {
+      const fin = add(new THREE.BoxGeometry(0.02, 0.18, shell.r * 1.3), additive(color, 0.6), 0, -shell.len * 0.35, 0);
+      fin.rotation.y = (i / shell.fins) * Math.PI * 2;
     }
+    if (p.type === 'flak') ring(shell.r * 1.35, 0.016, additive('#ffffff', 0.7), shell.len * 0.5);
     return group;
   }
 

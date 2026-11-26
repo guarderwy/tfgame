@@ -1,4 +1,4 @@
-import type { EnemyConfig, EnemyType, TowerConfig, TowerType } from './types';
+import type { EnemyConfig, EnemyType, TargetMode, TowerConfig, TowerType } from './types';
 
 export const TILE = 40;
 export const COLS = 24;
@@ -31,47 +31,47 @@ export const ENEMY_CONFIG: Record<EnemyType, EnemyConfig> = {
 export const TOWER_CONFIG: Record<TowerType, TowerConfig> = {
   machinegun: {
     name: '机枪炮台', desc: '射速快，克制步兵与轻甲', cost: 60,
-    damage: 10, range: 110, fireRate: 4, color: '#e0b34d',
+    damage: 10, range: 110, fireRate: 4, color: '#e0b34d', body: '#f2a72b', secondary: '#fff0c9', pattern: 'stripe',
     targets: ['ground'], splash: 0, projectileSpeed: 520,
   },
   howitzer: {
     name: '榴弹炮', desc: '范围爆炸，克制集群与坦克', cost: 90,
-    damage: 42, range: 150, fireRate: 0.9, color: '#d9794a',
+    damage: 42, range: 150, fireRate: 0.9, color: '#d9794a', body: '#ef5f2a', secondary: '#ffd9c2', pattern: 'chevron',
     targets: ['ground'], splash: 42, projectileSpeed: 300,
   },
   aa: {
     name: '防空炮', desc: '专门拦截空中单位', cost: 80,
-    damage: 14, range: 135, fireRate: 3.5, color: '#69b6c9',
+    damage: 14, range: 135, fireRate: 3.5, color: '#69b6c9', body: '#00a6cf', secondary: '#d6f6ff', pattern: 'dot',
     targets: ['air'], splash: 0, projectileSpeed: 600,
   },
   coastal: {
     name: '岸防炮', desc: '重炮，专门攻击水路舰船', cost: 105,
-    damage: 55, range: 170, fireRate: 1, color: '#8fa3c4',
+    damage: 55, range: 170, fireRate: 1, color: '#8fa3c4', body: '#3f74d8', secondary: '#dbe7ff', pattern: 'grid',
     targets: ['water'], splash: 20, projectileSpeed: 340,
   },
   laser: {
     name: '激光炮', desc: '持续能量束，可打地面与空中', cost: 120,
-    damage: 9, range: 140, fireRate: 4.5, color: '#79e2d6',
+    damage: 9, range: 140, fireRate: 4.5, color: '#79e2d6', body: '#00c9a7', secondary: '#d9fff5', pattern: 'circuit',
     targets: ['ground', 'air'], splash: 0, projectileSpeed: 760,
   },
   flak: {
     name: '防空爆破炮', desc: '空中范围爆炸，克制机群', cost: 130,
-    damage: 38, range: 160, fireRate: 1.5, color: '#f0a95c',
+    damage: 38, range: 160, fireRate: 1.5, color: '#f0a95c', body: '#ff8a1f', secondary: '#ffe4bd', pattern: 'warning',
     targets: ['air'], splash: 50, projectileSpeed: 460,
   },
   railgun: {
     name: '电磁轨道炮', desc: '超远射程，无视护甲', cost: 180,
-    damage: 120, range: 230, fireRate: 0.65, color: '#c9d6f0',
+    damage: 120, range: 230, fireRate: 0.65, color: '#c9d6f0', body: '#5d8cf5', secondary: '#e3ecff', pattern: 'grid',
     targets: ['ground', 'water'], splash: 0, projectileSpeed: 1200, pierceArmor: true,
   },
   tesla: {
     name: '电弧塔', desc: '闪电连锁，最多命中 3 个地面目标', cost: 150,
-    damage: 32, range: 132, fireRate: 1.8, color: '#b48cf0',
+    damage: 32, range: 132, fireRate: 1.8, color: '#b48cf0', body: '#9a4ff0', secondary: '#ead9ff', pattern: 'circuit',
     targets: ['ground'], splash: 0, projectileSpeed: 800, chain: 3,
   },
   mine: {
     name: '水雷布设器', desc: '建于水边陆地，定时向水路布雷；舰船触碰引爆，1级3颗起，满级5颗', cost: 90,
-    damage: 45, range: 130, fireRate: 0.4, color: '#e4695d',
+    damage: 45, range: 130, fireRate: 0.4, color: '#e4695d', body: '#e83737', secondary: '#ffd2cd', pattern: 'warning',
     targets: ['water'], splash: 52, projectileSpeed: 0, minelayer: true,
   },
 };
@@ -85,6 +85,18 @@ export const UPGRADE_FACTOR = {
 
 export const SELL_REFUND = 0.6;
 export const MAX_LEVEL = 3;
+
+// 索敌优先级：每座炮塔独立设置，「最前」保持原有默认行为
+export const TARGET_MODES: { id: TargetMode; label: string; desc: string }[] = [
+  { id: 'first', label: '最前', desc: '优先攻击最接近基地的敌人（默认）' },
+  { id: 'close', label: '最近', desc: '优先攻击离本炮塔最近的敌人' },
+  { id: 'weak', label: '残血', desc: '优先补刀当前生命最低的敌人' },
+  { id: 'strong', label: '高血', desc: '优先集火当前生命最高的敌人' },
+  { id: 'bounty', label: '高赏金', desc: '优先击杀赏金最高的敌人' },
+];
+export const TARGET_MODE_LABEL: Record<TargetMode, string> = {
+  first: '最前', close: '最近', weak: '残血', strong: '高血', bounty: '高赏金',
+};
 
 // 波次节奏与奖励：整备倒计时、提前出击奖励、清波奖励（随关卡成长）
 export const WAVE_BREAK_SECONDS = 6;

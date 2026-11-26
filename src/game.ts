@@ -1,13 +1,14 @@
 import {
   BASE_TILE, COLS, difficultyScale, ENEMY_CONFIG, HEIGHT, MAX_LEVEL, ROWS, SELL_REFUND,
-  TILE, TOWER_CONFIG, UPGRADE_FACTOR, WAVE_BREAK_BONUS, WAVE_BREAK_SECONDS,
-  WAVE_CLEAR_BONUS_BASE, WAVE_CLEAR_BONUS_PER_LEVEL, WIDTH, starsFor, tileToPixel,
+  TARGET_MODE_LABEL, TARGET_MODES, TILE, TOWER_CONFIG, UPGRADE_FACTOR,
+  WAVE_BREAK_BONUS, WAVE_BREAK_SECONDS, WAVE_CLEAR_BONUS_BASE,
+  WAVE_CLEAR_BONUS_PER_LEVEL, WIDTH, starsFor, tileToPixel,
 } from './config';
 import { LEVELS } from './levels';
 import { Renderer3D } from './renderer3d';
 import { AudioKit } from './audio';
 import type { Enemy, Effect, NavalMine, Particle, PathData, Projectile, SpawnTask, Tower } from './gameTypes';
-import type { EnemyType, Point, SpawnGroup, TowerType } from './types';
+import type { EnemyType, Point, SpawnGroup, TargetMode, TowerType } from './types';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -96,8 +97,10 @@ export class Game {
   private speed = 1;
   private paused = false;
   private screenMode: 'standard' | 'wide' = 'standard';
+  private highContrast = false;
   private buildType: TowerType | null = null;
   private selected: Tower | null = null;
+  private targetDefaults: Partial<Record<TowerType, TargetMode>> = {};
   private hoverTile: [number, number] | null = null;
   private towerAt = new Map<string, Tower>();
   private groundPaths: PathData[] = [];
@@ -137,12 +140,16 @@ export class Game {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.loadProgress();
+    this.targetDefaults = this.loadTargetDefaults();
     this.restoreAudioSettings();
     this.screenMode = this.restoreScreenMode();
     this.setScreenMode(this.screenMode, false);
     this.view = new Renderer3D(canvas);
+    this.highContrast = this.restoreHighContrast();
+    this.view.setHighContrast(this.highContrast);
     this.view.setThunderSound(() => this.audio.thunder());
     this.buildTowerList();
+    this.buildPriorityOptions();
     this.buildEnemyCodex();
     this.fillLevelSelect();
     this.bindTabs();
@@ -156,6 +163,7 @@ export class Game {
     window.addEventListener('beforeunload', this.destroy);
     document.addEventListener('visibilitychange', this.onVisibility);
     this.syncAudioButtons();
+    this.syncContrastButton();
   }
 
   destroy = () => {
@@ -186,6 +194,26 @@ export class Game {
     } catch { /* 忽略隐私模式限制 */ }
   }
 
+  private loadTargetDefaults(): Partial<Record<TowerType, TargetMode>> {
+    try {
+      const raw = JSON.parse(localStorage.getItem('tfgame:targetModes') ?? '{}') as Record<string, string>;
+      const out: Partial<Record<TowerType, TargetMode>> = {};
+      for (const type of Object.keys(TOWER_CONFIG) as TowerType[]) {
+        const mode = raw[type];
+        if (TARGET_MODES.some((m) => m.id === mode)) out[type] = mode as TargetMode;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  private saveTargetDefaults() {
+    try {
+      localStorage.setItem('tfgame:targetModes', JSON.stringify(this.targetDefaults));
+    } catch { /* 忽略隐私模式限制 */ }
+  }
+
   private restoreAudioSettings() {
     try {
       this.audio.setMusicMuted(localStorage.getItem('tfgame:musicMuted') === '1');
@@ -198,6 +226,21 @@ export class Game {
       localStorage.setItem('tfgame:musicMuted', this.audio.musicMuted ? '1' : '0');
       localStorage.setItem('tfgame:sfxMuted', this.audio.muted ? '1' : '0');
     } catch { /* 忽略隐私模式限制 */ }
+  }
+
+  private restoreHighContrast() {
+    try {
+      return localStorage.getItem('tfgame:highContrast') === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  private syncContrastButton() {
+    const btn = $('btn-contrast') as HTMLButtonElement;
+    btn.textContent = this.highContrast ? '高对比 开' : '高对比 关';
+    btn.classList.toggle('active', this.highContrast);
+    btn.setAttribute('aria-pressed', String(this.highContrast));
   }
 
   private togglePause() {
@@ -307,6 +350,16 @@ export class Game {
     }
   }
 
+  private buildPriorityOptions() {
+    const box = $('priority-options');
+    box.innerHTML = TARGET_MODES.map((m) =>
+      `<button type="button" class="priority-btn" data-mode="${m.id}" title="${m.desc}" aria-pressed="false">${m.label}</button>`,
+    ).join('');
+    box.querySelectorAll<HTMLButtonElement>('.priority-btn').forEach((btn) => {
+      btn.addEventListener('click', () => this.setTargetMode(btn.dataset.mode as TargetMode));
+    });
+  }
+
   private showTab(name: 'build' | 'codex') {
     document.querySelectorAll<HTMLElement>('.build-panel .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     $('tab-build').classList.toggle('hidden', name !== 'build');
@@ -338,6 +391,7 @@ export class Game {
     $('info-target').textContent = c.minelayer ? String(c.range) : c.targets.map((x) => x === 'ground' ? '地面' : x === 'air' ? '空中' : '水路').join('/');
     $('info-desc').textContent = c.desc;
     $('info-actions').classList.add('hidden');
+    $('info-priority').classList.add('hidden');
   }
 
   private bindTabs() {
@@ -408,6 +462,7 @@ export class Game {
     $('info-desc').textContent = this.enemyCounterNote(type);
     $('info-desc').classList.add('counter');
     $('info-actions').classList.add('hidden');
+    $('info-priority').classList.add('hidden');
   }
 
   private enemyCounterNote(type: EnemyType): string {
@@ -514,6 +569,12 @@ export class Game {
       if (!muted) this.audio.unlock();
       this.persistAudioSettings();
     });
+    $('btn-contrast').addEventListener('click', () => {
+      this.highContrast = !this.highContrast;
+      this.view.setHighContrast(this.highContrast);
+      this.syncContrastButton();
+      try { localStorage.setItem('tfgame:highContrast', this.highContrast ? '1' : '0'); } catch { /* 忽略隐私模式限制 */ }
+    });
     document.addEventListener('click', () => this.audio.unlock(), { once: true });
     $('btn-upgrade').addEventListener('click', () => {
       this.upgradeSelected();
@@ -542,6 +603,13 @@ export class Game {
       if (e.key === 'q' || e.key === 'Q') this.view.rotateBy(-Math.PI / 8);
       if (e.key === 'e' || e.key === 'E') this.view.rotateBy(Math.PI / 8);
       if (e.key === 'f' || e.key === 'F') this.setScreenMode(this.screenMode === 'standard' ? 'wide' : 'standard');
+      if (e.key === 'r' || e.key === 'R') {
+        const t = this.selected;
+        if (t && !TOWER_CONFIG[t.type].minelayer && !this.el('detail-modal').classList.contains('hidden')) {
+          const modes = TARGET_MODES.map((m) => m.id);
+          this.setTargetMode(modes[(modes.indexOf(t.targetMode) + 1) % modes.length]);
+        }
+      }
       if (e.key === 'p' || e.key === 'P') this.togglePause();
       if (e.code === 'Space') { e.preventDefault(); if (this.status !== 'wave') this.startWave(true); }
     });
@@ -602,7 +670,8 @@ export class Game {
     if (this.gold < cfg.cost) { this.flash('金币不足'); return; }
     const pos = tileToPixel(tx, ty);
     const tower: Tower = {
-      id: ++this.id, type, level: 1, tx, ty, x: pos.x, y: pos.y,
+      id: ++this.id, type, targetMode: this.targetDefaults[type] ?? 'first',
+      level: 1, tx, ty, x: pos.x, y: pos.y,
       damage: cfg.damage, range: cfg.range, fireRate: cfg.fireRate,
       cooldown: 0, totalCost: cfg.cost, angle: -Math.PI / 2,
     };
@@ -649,6 +718,15 @@ export class Game {
     this.towerAt.delete(key(t.tx, t.ty));
     this.selected = null;
     this.syncAll();
+  }
+
+  private setTargetMode(mode: TargetMode) {
+    const t = this.selected;
+    if (!t || TOWER_CONFIG[t.type].minelayer || !TARGET_MODES.some((m) => m.id === mode) || t.targetMode === mode) return;
+    t.targetMode = mode;
+    this.targetDefaults[t.type] = mode;
+    this.saveTargetDefaults();
+    this.syncInfo();
   }
 
   private flash(msg: string) {
@@ -812,14 +890,29 @@ export class Game {
 
   private findTarget(t: Tower): Enemy | null {
     let best: Enemy | null = null;
+    let bestScore = Infinity;
     let bestRemaining = Infinity;
     for (const e of this.enemies) {
       if (e.dead) continue;
       if (e.x < 0 || e.x > WIDTH || e.y < 0 || e.y > HEIGHT) continue;
       if (!TOWER_CONFIG[t.type].targets.includes(e.kind)) continue;
-      if (Math.hypot(e.x - t.x, e.y - t.y) > t.range) continue;
+      const dist = Math.hypot(e.x - t.x, e.y - t.y);
+      if (dist > t.range) continue;
       const remaining = e.path.length - e.traveled;
-      if (remaining < bestRemaining) { bestRemaining = remaining; best = e; }
+      let score: number;
+      switch (t.targetMode) {
+        case 'close': score = dist; break;
+        case 'weak': score = e.hp; break;
+        case 'strong': score = -e.hp; break;
+        case 'bounty': score = -e.bounty; break;
+        default: score = remaining;
+      }
+      // 同分时优先更接近基地的目标，避免「高血/高赏金」漏掉即将到达的敌人
+      if (score < bestScore || (score === bestScore && remaining < bestRemaining)) {
+        bestScore = score;
+        bestRemaining = remaining;
+        best = e;
+      }
     }
     return best;
   }
@@ -1297,6 +1390,7 @@ export class Game {
   private syncInfo() {
     const t = this.selected;
     if (!t) {
+      $('info-priority').classList.add('hidden');
       if (this.buildType) {
         this.showWeaponPreview(this.buildType);
       } else {
@@ -1312,15 +1406,21 @@ export class Game {
     labels.forEach((label, i) => { $(`info-k${i + 1}`).textContent = label; });
     $('info-desc').classList.remove('counter');
     $('info-actions').classList.remove('hidden');
+    $('info-priority').classList.toggle('hidden', !!cfg.minelayer);
     this.setInfoIcon(t.type, cfg.color, '防御塔图鉴');
     $('info-name').textContent = `${cfg.name} Lv.${t.level}`;
-    $('info-tags').innerHTML = `<span class="tag">造价 ${t.totalCost}</span>${cfg.minelayer ? `<span class="tag alt">每次布雷 ${t.level + 2} 颗</span>` : ''}${cfg.pierceArmor ? '<span class="tag alt">穿甲</span>' : ''}${cfg.chain ? `<span class="tag alt">连锁 ${cfg.chain}</span>` : ''}${cfg.splash && !cfg.minelayer ? `<span class="tag alt">溅射 ${cfg.splash}</span>` : ''}`;
+    $('info-tags').innerHTML = `<span class="tag">造价 ${t.totalCost}</span>${cfg.minelayer ? '' : `<span class="tag alt">优先 ${TARGET_MODE_LABEL[t.targetMode]}</span>`}${cfg.minelayer ? `<span class="tag alt">每次布雷 ${t.level + 2} 颗</span>` : ''}${cfg.pierceArmor ? '<span class="tag alt">穿甲</span>' : ''}${cfg.chain ? `<span class="tag alt">连锁 ${cfg.chain}</span>` : ''}${cfg.splash && !cfg.minelayer ? `<span class="tag alt">溅射 ${cfg.splash}</span>` : ''}`;
     $('info-level').textContent = `${t.level} / ${MAX_LEVEL}`;
     $('info-damage').textContent = Math.round(t.damage).toString();
     $('info-range').textContent = cfg.minelayer ? Math.round(TOWER_CONFIG.mine.splash).toString() : Math.round(t.range).toString();
     $('info-rate').textContent = cfg.minelayer ? `${(1 / t.fireRate).toFixed(1)} 秒` : `${t.fireRate.toFixed(1)} /秒`;
     $('info-target').textContent = cfg.minelayer ? Math.round(t.range).toString() : cfg.targets.map((x) => x === 'ground' ? '地面' : x === 'air' ? '空中' : '水路').join('/');
     $('info-desc').textContent = cfg.desc;
+    $('priority-options').querySelectorAll<HTMLButtonElement>('.priority-btn').forEach((btn) => {
+      const active = btn.dataset.mode === t.targetMode;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
     this.syncUpgradeButton();
     ($('btn-sell') as HTMLButtonElement).textContent = `出售 +${Math.round(t.totalCost * SELL_REFUND)}`;
   }
