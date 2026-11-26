@@ -1,6 +1,6 @@
 import {
   BASE_TILE, COLS, difficultyScale, ENEMY_CONFIG, HEIGHT, MAX_LEVEL, ROWS, SELL_REFUND,
-  TARGET_MODE_LABEL, TARGET_MODES, TILE, TOWER_CONFIG, UPGRADE_FACTOR,
+  TARGET_MODE_LABEL, TARGET_MODES, TILE, TOWER_CONFIG, TOWER_ORDER, TOWER_UNLOCK, UPGRADE_FACTOR, isTowerUnlocked,
   WAVE_BREAK_BONUS, WAVE_BREAK_SECONDS, WAVE_CLEAR_BONUS_BASE,
   WAVE_CLEAR_BONUS_PER_LEVEL, WIDTH, starsFor, tileToPixel,
 } from './config';
@@ -318,26 +318,27 @@ export class Game {
 
   private buildTowerList() {
     const list = $('tower-list');
-    const order: TowerType[] = ['machinegun', 'howitzer', 'aa', 'coastal', 'laser', 'flak', 'railgun', 'tesla', 'mine'];
-    list.innerHTML = order.map((type, i) => {
+    list.innerHTML = TOWER_ORDER.map((type, i) => {
       const c = TOWER_CONFIG[type];
+      const locked = !isTowerUnlocked(type, this.level.id);
       const targetText = c.targets.map((t) => t === 'ground' ? '地面' : t === 'air' ? '空中' : '水路').join('/');
       const features = [c.pierceArmor ? '穿甲' : '', c.splash ? `溅射${c.splash}` : '', c.chain ? `连锁${c.chain}` : '', c.minelayer ? '定时布雷' : ''].filter(Boolean).join('·');
-      return `<button class="tower-card" data-type="${type}" style="--swatch:${c.color}">
+      return `<button class="tower-card${locked ? ' locked' : ''}" data-type="${type}" data-key="${i + 1}" style="--swatch:${c.color}"${locked ? ' disabled aria-disabled="true"' : ''}>
         <span class="tower-swatch"></span>
         <span class="tower-main">
           <span class="tower-title"><strong>${c.name}</strong><span class="tower-cost">${c.cost}</span></span>
-          <span class="tower-desc">${c.desc}</span>
+          <span class="tower-desc">${locked ? `第 ${TOWER_UNLOCK[type]} 关解锁 · ` : ''}${c.desc}</span>
           <span class="tower-stats">伤害 ${c.damage} · 射程 ${c.range} · ${c.fireRate.toFixed(1)}/秒</span>
           <span class="tower-tags"><span class="minitag">${targetText}</span>${features ? `<span class="minitag alt">${features}</span>` : ''}</span>
         </span>
-        <span class="tower-key">${i + 1}</span>
+        <span class="tower-key">${locked ? '锁' : i + 1}</span>
       </button>`;
     }).join('');
     this.towerCards = Array.from(list.querySelectorAll<HTMLButtonElement>('.tower-card'));
     for (const btn of this.towerCards) {
       btn.addEventListener('click', () => {
         const type = btn.dataset.type as TowerType;
+        if (!isTowerUnlocked(type, this.level.id)) { this.flash(`第 ${TOWER_UNLOCK[type]} 关解锁`); return; }
         this.buildType = this.buildType === type ? null : type;
         if (this.buildType) this.selected = null;
         this.uiCache.towerKey = ''; // 卡片重建后强制刷新一次高亮/可负担态
@@ -486,12 +487,20 @@ export class Game {
 
   private syncTowerList() {
     // 缓存卡片引用 + 变化去重：金币未变且建造模式未变时跳过 DOM 写入
-    const key = `${this.buildType ?? ''}|${this.gold}`;
+    const key = `${this.level.id}|${this.buildType ?? ''}|${this.gold}`;
     if (this.uiCache.towerKey === key) return;
     this.uiCache.towerKey = key;
     for (const btn of this.towerCards) {
-      btn.classList.toggle('active', btn.dataset.type === this.buildType);
-      btn.classList.toggle('unaffordable', TOWER_CONFIG[btn.dataset.type as TowerType].cost > this.gold);
+      const type = btn.dataset.type as TowerType;
+      const locked = !isTowerUnlocked(type, this.level.id);
+      btn.classList.toggle('locked', locked);
+      btn.disabled = locked;
+      btn.classList.toggle('active', !locked && type === this.buildType);
+      btn.classList.toggle('unaffordable', !locked && TOWER_CONFIG[type].cost > this.gold);
+      const desc = btn.querySelector('.tower-desc');
+      if (desc) desc.textContent = `${locked ? `第 ${TOWER_UNLOCK[type]} 关解锁 · ` : ''}${TOWER_CONFIG[type].desc}`;
+      const keyEl = btn.querySelector('.tower-key');
+      if (keyEl) keyEl.textContent = locked ? '锁' : (btn.dataset.key ?? '');
     }
   }
 
@@ -588,11 +597,16 @@ export class Game {
     $('btn-next').addEventListener('click', () => this.loadLevel(Math.min(LEVELS.length, this.level.id + 1)));
 
     window.addEventListener('keydown', (e) => {
-      const map: Record<string, TowerType> = {
-        '1': 'machinegun', '2': 'howitzer', '3': 'aa', '4': 'coastal',
-        '5': 'laser', '6': 'flak', '7': 'railgun', '8': 'tesla', '9': 'mine',
-      };
-      if (map[e.key]) { this.buildType = map[e.key]; this.showTab('build'); this.syncTowerList(); }
+      const type = TOWER_ORDER[Number(e.key) - 1];
+      if (e.key >= '1' && e.key <= '9' && type) {
+        if (isTowerUnlocked(type, this.level.id)) {
+          this.buildType = type;
+          this.showTab('build');
+          this.syncTowerList();
+        } else {
+          this.flash(`第 ${TOWER_UNLOCK[type]} 关解锁`);
+        }
+      }
       if (e.key === 'Escape') {
         this.closeModal('detail-modal');
         this.buildType = null;
@@ -665,6 +679,7 @@ export class Game {
 
   private tryBuild(tx: number, ty: number, type: TowerType) {
     const cfg = TOWER_CONFIG[type];
+    if (!isTowerUnlocked(type, this.level.id)) { this.flash(`第 ${TOWER_UNLOCK[type]} 关解锁`); return; }
     if (!this.canBuild(tx, ty)) { this.flash('此处无法建造'); return; }
     if (cfg.minelayer && this.waterPaths.length === 0) { this.flash('本关没有水路，无法布设水雷'); return; }
     if (this.gold < cfg.cost) { this.flash('金币不足'); return; }
@@ -1367,6 +1382,8 @@ export class Game {
       const stars = starsFor(this.lives, this.level.lives);
       this.stars[this.level.id] = Math.max(this.stars[this.level.id] ?? 0, stars);
       this.saveProgress();
+      this.uiCache.towerKey = '';
+      this.syncTowerList();
       starsEl.hidden = false;
       starsEl.innerHTML =
         `<span>${'★'.repeat(stars)}</span><span class="dim">${'★'.repeat(3 - stars)}</span>`;

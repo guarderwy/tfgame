@@ -521,6 +521,9 @@ html[data-screen="wide"] canvas { aspect-ratio: 16 / 9; }
 .tower-card.active { border-color: var(--accent); background: linear-gradient(180deg, rgba(58, 66, 40, 0.95), rgba(38, 48, 32, 0.95)); box-shadow: 0 0 0 1px var(--accent-line), 0 8px 20px rgba(0, 0, 0, 0.3); }
 .tower-card.active::before { opacity: 1; width: 4px; }
 .tower-card.unaffordable { opacity: .5; filter: saturate(.6); }
+.tower-card.locked { opacity: .42; filter: grayscale(.85); cursor: not-allowed; }
+.tower-card.locked:hover { border-color: var(--line-2); transform: none; box-shadow: none; }
+.tower-card.locked .tower-key { font-size: 9px; }
 .tower-swatch { width: 16px; height: 16px; margin-top: 2px; border-radius: 5px; background: var(--swatch); border: 2px solid rgba(0, 0, 0, 0.45); }
 .tower-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .tower-title { display: flex; align-items: center; justify-content: space-between; gap: 6px; }

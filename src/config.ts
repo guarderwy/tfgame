@@ -76,6 +76,19 @@ export const TOWER_CONFIG: Record<TowerType, TowerConfig> = {
   },
 };
 
+// 侧栏展示与数字键顺序：按造价升序，同价保持配置顺序
+export const TOWER_ORDER = (Object.keys(TOWER_CONFIG) as TowerType[])
+  .sort((a, b) => TOWER_CONFIG[a].cost - TOWER_CONFIG[b].cost);
+
+// 武器解锁：按当前选择的关卡判定
+export const TOWER_UNLOCK: Record<TowerType, number> = {
+  machinegun: 1, howitzer: 2, aa: 5, coastal: 3,
+  laser: 7, flak: 9, railgun: 13, tesla: 11, mine: 3,
+};
+export function isTowerUnlocked(type: TowerType, unlockedLevel: number) {
+  return unlockedLevel >= TOWER_UNLOCK[type];
+}
+
 export const UPGRADE_FACTOR = {
   damage: 1.4,
   range: 1.1,
