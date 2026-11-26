@@ -694,6 +694,7 @@ export class Game {
     this.towerAt.set(key(tx, ty), tower);
     this.gold -= cfg.cost;
     this.selected = tower;
+    this.buildType = null;
     this.audio.build();
     this.burst(pos.x, pos.y, 0.3, 8, cfg.color, 45, 0.08, 0.45);
     if (cfg.minelayer) this.layMines(tower);
