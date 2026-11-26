@@ -40,8 +40,8 @@ export const TOWER_CONFIG: Record<TowerType, TowerConfig> = {
     targets: ['ground'], splash: 42, projectileSpeed: 300,
   },
   aa: {
-    name: '防空炮', desc: '专门拦截空中单位', cost: 80,
-    damage: 14, range: 135, fireRate: 3.5, color: '#69b6c9', body: '#00a6cf', secondary: '#d6f6ff', pattern: 'dot',
+    name: '防空炮', desc: '高速拦截空中单位，单体高射速', cost: 90,
+    damage: 20, range: 150, fireRate: 4.2, color: '#69b6c9', body: '#00a6cf', secondary: '#d6f6ff', pattern: 'dot',
     targets: ['air'], splash: 0, projectileSpeed: 600,
   },
   coastal: {
