@@ -133,8 +133,11 @@ function wavesFor(level: number): Wave[] {
     if (boss) {
       // 首领：本关最强兵种的巨型强化版，压轴登场
       const bossType = [...pool].sort((a, b) => THREAT[b] - THREAT[a])[0];
+      const bossBaseHp = ENEMY_CONFIG[bossType].hp;
+      // 首领血量随关卡放大，并设早期下限：避免直升机/无人机这类高威胁低血量兵种当首领时过脆
+      const bossScale = Math.max(1.7 + level * 0.07, (170 + level * 30) / bossBaseHp);
       const lastSpawn = Math.max(...groups.map((item) => item.delay + (item.count - 1) * item.interval), 0);
-      groups.push(g(bossType, 1, 1, lastSpawn + 1.4, 0, 1.2 + level * 0.05, true));
+      groups.push(g(bossType, 1, 1, lastSpawn + 1.4, 0, bossScale, true));
     }
     waves.push(w(...groups));
   }
