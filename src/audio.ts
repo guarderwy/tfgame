@@ -1,4 +1,4 @@
-import type { TowerType } from './types';
+import type { TowerType, WeatherKind } from './types';
 
 interface MusicTrack {
   name: string;
@@ -42,6 +42,9 @@ export class AudioKit {
   private nextNoteTime = 0;
   private currentTrack = -1;
   private ambience: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  private weatherAudio: { src: AudioBufferSourceNode; filter: BiquadFilterNode; gain: GainNode } | null = null;
+  private lastWeather: { kind: WeatherKind | null; weight: number; wind: number } = { kind: null, weight: 0, wind: 0 };
+  private lastHailAt = 0;
   private lastHitAt = 0;
   muted = false;
   musicMuted = false;
@@ -100,6 +103,58 @@ export class AudioKit {
     this.ambience = { src, gain };
   }
 
+  /** 天气底噪：一条循环白噪声经滤波后按天气类型改变音色与音量 */
+  private startWeatherAudio() {
+    const ctx = this.ensure();
+    if (!ctx || !this.sfxBus || this.weatherAudio) return;
+    const len = Math.floor(ctx.sampleRate * 2);
+    const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1200;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    src.connect(filter).connect(gain).connect(this.sfxBus);
+    src.start();
+    this.weatherAudio = { src, filter, gain };
+    this.applyWeatherGain();
+  }
+
+  private applyWeatherGain() {
+    const ctx = this.ctx;
+    const audio = this.weatherAudio;
+    if (!ctx || !audio) return;
+    const { kind, weight, wind } = this.lastWeather;
+    let cutoff = 1200;
+    let level = 0;
+    switch (kind) {
+      case 'rain': cutoff = 2200; level = 0.05; break;
+      case 'thunderstorm': cutoff = 2600; level = 0.065; break;
+      case 'acidrain': cutoff = 2400; level = 0.05; break;
+      case 'hail': cutoff = 4800; level = 0.075; break;
+      case 'sandstorm': cutoff = 380; level = 0.055 * (0.45 + 0.55 * wind); break;
+      case 'ash': cutoff = 700; level = 0.04; break;
+      case 'meteor': cutoff = 1000; level = 0.035; break;
+      case 'snow': cutoff = 1200; level = 0.018; break;
+      default: cutoff = 1200; level = 0;
+    }
+    const t = ctx.currentTime;
+    audio.filter.frequency.setTargetAtTime(cutoff, t, 0.2);
+    audio.gain.gain.setTargetAtTime(this.musicPaused ? 0 : level * weight, t, 0.25);
+  }
+
+  /** 每帧由 Game 同步天气状态，音量随天气淡入淡出平滑变化 */
+  setWeather(kind: WeatherKind | null, weight: number, wind: number) {
+    this.lastWeather = { kind, weight, wind };
+    if (kind && weight > 0) this.startWeatherAudio();
+    this.applyWeatherGain();
+  }
+
   private connectSfx(node: AudioNode, pan: number) {
     if (!this.ctx || !this.sfxBus) return;
     if (pan !== 0) {
@@ -151,12 +206,14 @@ export class AudioKit {
       this.musicTimer = null;
       if (this.ctx && this.musicBus) this.musicBus.gain.setTargetAtTime(0, this.ctx.currentTime, 0.04);
       if (this.ctx && this.ambience) this.ambience.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.04);
+      this.applyWeatherGain();
       return;
     }
     const ctx = this.ensure();
     if (!ctx || !this.musicBus) return;
     this.musicBus.gain.setTargetAtTime(this.musicMuted ? 0 : 0.9, ctx.currentTime, 0.04);
     if (this.ambience) this.ambience.gain.gain.setTargetAtTime(0.055, ctx.currentTime, 0.04);
+    this.applyWeatherGain();
     if (this.currentTrack >= 0 && !this.musicMuted) {
       this.nextNoteTime = ctx.currentTime + 0.05;
       this.musicTimer = window.setInterval(() => this.scheduleMusic(), 25);
@@ -196,6 +253,10 @@ export class AudioKit {
     if (this.ambience) {
       try { this.ambience.src.stop(); } catch { /* 已停止 */ }
       this.ambience = null;
+    }
+    if (this.weatherAudio) {
+      try { this.weatherAudio.src.stop(); } catch { /* 已停止 */ }
+      this.weatherAudio = null;
     }
     this.disposed = true;
     if (this.ctx) void this.ctx.close();
@@ -316,6 +377,21 @@ export class AudioKit {
     this.tone(58, 0.7, 'sine', 0.14, 32, pan);
     // 余震二次滚雷
     this.after(280, () => this.noise(0.6, 0.12, 220, 60, pan));
+  }
+
+  /** 冰雹落地敲击：短促高频脆响，由天气系统按落地频率节流调用 */
+  hailTick() {
+    const ctx = this.ensure();
+    if (!ctx || this.muted || ctx.currentTime - this.lastHailAt < 0.06) return;
+    this.lastHailAt = ctx.currentTime;
+    this.noise(0.05, 0.075, 4200, 1600);
+    this.tone(1450, 0.045, 'triangle', 0.03, 720);
+  }
+
+  /** 陨石落地：低频冲击 + 尾随噪声，与冲击波同步 */
+  meteorImpact() {
+    this.noise(0.5, 0.16, 900, 120);
+    this.tone(85, 0.4, 'sine', 0.12, 38);
   }
 
   win() {

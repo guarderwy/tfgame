@@ -49,6 +49,24 @@
               <button id="btn-audio" class="menu-item" type="button">音效 开</button>
               <div class="menu-sep"></div>
               <button id="btn-contrast" class="menu-item" type="button">高对比 关</button>
+              <div class="menu-sep"></div>
+              <label class="menu-label" for="weather-select">天气</label>
+              <select id="weather-select" class="menu-select" aria-label="天气模式">
+                <option value="auto">自动轮换</option>
+                <option value="off">关闭天气</option>
+                <option value="snow">飘雪</option>
+                <option value="rain">细雨</option>
+                <option value="thunderstorm">雷暴</option>
+                <option value="sandstorm">沙暴</option>
+                <option value="fog">浓雾</option>
+                <option value="hail">冰雹</option>
+                <option value="aurora">极光</option>
+                <option value="ash">火山灰</option>
+                <option value="acidrain">酸雨</option>
+                <option value="meteor">陨石雨</option>
+                <option value="fireflies">萤火虫</option>
+              </select>
+              <button id="btn-daycycle" class="menu-item" type="button">昼夜循环 关</button>
             </div>
           </details>
         </div>
@@ -94,7 +112,7 @@
             <canvas id="game" width="960" height="600"></canvas>
             <div id="fx-layer" class="fx-layer"></div>
             <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-            <div id="stage-hud" class="stage-hud" data-state="ready"><span class="hud-dot"></span><span id="hud-status">待命</span></div>
+            <div id="stage-hud" class="stage-hud" data-state="ready"><span class="hud-dot"></span><span id="hud-status">待命</span><span id="weather-badge" class="weather-badge">晴朗</span></div>
             <div id="banner" class="banner hidden"></div>
             <div id="result" class="result hidden">
               <div class="result-card">

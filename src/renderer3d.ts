@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { BASE_TILE, COLS, ROWS, TILE, TOWER_CONFIG } from './config';
 import { WeatherSystem } from './weather';
-import type { DecoKind, EnemyType, LevelTheme, Point, TowerPattern, TowerType } from './types';
+import type { DecoKind, EnemyType, LevelTheme, Point, TowerPattern, TowerType, WeatherKind } from './types';
 import type { Effect, Enemy, NavalMine, Particle, PathData, Projectile, Tower } from './gameTypes';
 
 export interface RenderState {
@@ -457,7 +457,7 @@ export class Renderer3D {
     this.sun.shadow.camera.bottom = -14;
     this.scene.add(this.sun);
 
-    this.weather = new WeatherSystem(this.scene, this.hemi, this.sun, this.renderer);
+    this.weather = new WeatherSystem(this.scene, this.hemi, this.sun, this.renderer, this.camera);
 
     this.groundMat = mat('#2f3d29');
     this.groundPlane = new THREE.Mesh(new THREE.PlaneGeometry(COLS, ROWS), this.groundMat);
@@ -521,9 +521,24 @@ export class Renderer3D {
     envScene.traverse((obj) => disposeObject(obj));
   }
 
-  /** 注入雷声回调（由 Game 层接 AudioKit，天气系统不持有音频引用） */
-  setThunderSound(cb: () => void) {
-    this.weather.setThunderCallback(cb);
+  /** 注入天气音效回调（由 Game 层接 AudioKit，天气系统不持有音频引用） */
+  setThunderSound(cb: () => void) { this.weather.setThunderCallback(cb); }
+  setHailSound(cb: () => void) { this.weather.setHailCallback(cb); }
+  setMeteorSound(cb: () => void) { this.weather.setMeteorCallback(cb); }
+
+  /** 天气菜单：auto / off / 指定天气 */
+  setWeatherMode(mode: 'auto' | 'off' | WeatherKind) {
+    this.weather.setWeatherMode(mode);
+  }
+
+  /** 动态昼夜开关 */
+  setDayCycle(on: boolean) {
+    this.weather.setDayCycle(on);
+  }
+
+  /** 当前天气状态（UI 徽标、环境音、地面湿润度） */
+  getWeatherState() {
+    return this.weather.getWeatherState();
   }
 
   private get accentIntensity() {
@@ -538,6 +553,16 @@ export class Renderer3D {
   private applyContrast() {
     // 灯光与曝光由天气系统每帧统一施加，避免被 atmosphere 覆盖；此处仅同步状态
     this.weather.setHighContrast(this.highContrast);
+  }
+
+  /** 把天气状态映射到地面材质与夜间辉光强度 */
+  private applyWeatherVisuals() {
+    const state = this.weather.getWeatherState();
+    this.groundMat.roughness = 0.75 - 0.45 * state.wetness;
+    this.groundMat.metalness = 0.12 + 0.3 * state.wetness;
+    const theme = this.currentTheme;
+    const baseNight = theme?.night ? 1.3 : theme && theme.ambient < 0.9 ? 1.15 : 1;
+    this.nightFactor = baseNight * (1 + state.night * 0.28);
   }
 
   destroy() {
@@ -2437,6 +2462,7 @@ export class Renderer3D {
       this.updateCamera();
     }
     this.weather.update();
+    this.applyWeatherVisuals();
     this.updateFlag();
     this.composer.render();
   }

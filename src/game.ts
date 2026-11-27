@@ -8,9 +8,14 @@ import { LEVELS } from './levels';
 import { Renderer3D } from './renderer3d';
 import { AudioKit } from './audio';
 import type { Enemy, Effect, NavalMine, Particle, PathData, Projectile, SpawnTask, Tower } from './gameTypes';
-import type { EnemyType, Point, SpawnGroup, TargetMode, TowerType } from './types';
+import type { EnemyType, Point, SpawnGroup, TargetMode, TowerType, WeatherKind } from './types';
 
 const $ = (id: string) => document.getElementById(id)!;
+
+const WEATHER_LABELS: Record<WeatherKind, string> = {
+  snow: '飘雪', rain: '细雨', sandstorm: '沙暴', thunderstorm: '雷暴', fireflies: '萤火虫', fog: '浓雾',
+  hail: '冰雹', aurora: '极光', ash: '火山灰', acidrain: '酸雨', meteor: '陨石雨',
+};
 
 const icon = (body: string) => `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 
@@ -98,6 +103,8 @@ export class Game {
   private paused = false;
   private screenMode: 'standard' | 'wide' = 'standard';
   private highContrast = false;
+  private weatherMode: 'auto' | 'off' | WeatherKind = 'auto';
+  private dayCycle = false;
   private buildType: TowerType | null = null;
   private selected: Tower | null = null;
   private targetDefaults: Partial<Record<TowerType, TargetMode>> = {};
@@ -121,7 +128,7 @@ export class Game {
   private towerCards: HTMLButtonElement[] = [];
   private uiCache = {
     level: -1, gold: -1, lives: -1, wave: '', status: '', progress: -1,
-    remaining: -1, startState: '', upgradeKey: '', towerKey: '',
+    remaining: -1, startState: '', upgradeKey: '', towerKey: '', weather: '',
   };
   private readonly onVisibility = () => {
     // 切出页面时自动暂停作战，避免后台空跑模拟与音乐调度
@@ -142,12 +149,17 @@ export class Game {
     this.loadProgress();
     this.targetDefaults = this.loadTargetDefaults();
     this.restoreAudioSettings();
+    this.restoreWeatherSettings();
     this.screenMode = this.restoreScreenMode();
     this.setScreenMode(this.screenMode, false);
     this.view = new Renderer3D(canvas);
     this.highContrast = this.restoreHighContrast();
     this.view.setHighContrast(this.highContrast);
+    this.view.setWeatherMode(this.weatherMode);
+    this.view.setDayCycle(this.dayCycle);
     this.view.setThunderSound(() => this.audio.thunder());
+    this.view.setHailSound(() => this.audio.hailTick());
+    this.view.setMeteorSound(() => this.audio.meteorImpact());
     this.buildTowerList();
     this.buildPriorityOptions();
     this.buildEnemyCodex();
@@ -164,6 +176,7 @@ export class Game {
     document.addEventListener('visibilitychange', this.onVisibility);
     this.syncAudioButtons();
     this.syncContrastButton();
+    this.syncWeatherControls();
   }
 
   destroy = () => {
@@ -242,6 +255,33 @@ export class Game {
     btn.textContent = this.highContrast ? '高对比 开' : '高对比 关';
     btn.classList.toggle('active', this.highContrast);
     btn.setAttribute('aria-pressed', String(this.highContrast));
+  }
+
+  private restoreWeatherSettings() {
+    try {
+      const mode = localStorage.getItem('tfgame:weatherMode') ?? 'auto';
+      const valid: string[] = ['auto', 'off', ...Object.keys(WEATHER_LABELS)];
+      this.weatherMode = valid.includes(mode) ? mode as 'auto' | 'off' | WeatherKind : 'auto';
+      this.dayCycle = localStorage.getItem('tfgame:dayCycle') === '1';
+    } catch {
+      this.weatherMode = 'auto';
+      this.dayCycle = false;
+    }
+  }
+
+  private persistWeatherSettings() {
+    try {
+      localStorage.setItem('tfgame:weatherMode', this.weatherMode);
+      localStorage.setItem('tfgame:dayCycle', this.dayCycle ? '1' : '0');
+    } catch { /* 忽略隐私模式限制 */ }
+  }
+
+  private syncWeatherControls() {
+    ($('weather-select') as HTMLSelectElement).value = this.weatherMode;
+    const btn = $('btn-daycycle') as HTMLButtonElement;
+    btn.textContent = `昼夜循环 ${this.dayCycle ? '开' : '关'}`;
+    btn.classList.toggle('active', this.dayCycle);
+    btn.setAttribute('aria-pressed', String(this.dayCycle));
   }
 
   private togglePause() {
@@ -596,6 +636,18 @@ export class Game {
       this.view.setHighContrast(this.highContrast);
       this.syncContrastButton();
       try { localStorage.setItem('tfgame:highContrast', this.highContrast ? '1' : '0'); } catch { /* 忽略隐私模式限制 */ }
+    });
+    ($('weather-select') as HTMLSelectElement).addEventListener('change', (e) => {
+      const mode = (e.target as HTMLSelectElement).value as 'auto' | 'off' | WeatherKind;
+      this.weatherMode = mode;
+      this.view.setWeatherMode(mode);
+      this.persistWeatherSettings();
+    });
+    $('btn-daycycle').addEventListener('click', () => {
+      this.dayCycle = !this.dayCycle;
+      this.view.setDayCycle(this.dayCycle);
+      this.syncWeatherControls();
+      this.persistWeatherSettings();
     });
     document.addEventListener('click', () => this.audio.unlock(), { once: true });
     $('btn-upgrade').addEventListener('click', () => {
@@ -1368,6 +1420,8 @@ export class Game {
     this.lastTime = now;
     this.update(dt);
     this.render();
+    const weather = this.view.getWeatherState();
+    this.audio.setWeather(weather.kind, weather.weight, weather.wind);
     this.syncUI();
     this.rafId = requestAnimationFrame(this.loop);
   };
@@ -1506,6 +1560,12 @@ export class Game {
     if (c.wave !== waveText) {
       this.el('stat-wave').textContent = waveText;
       c.wave = waveText;
+    }
+    const state = this.view.getWeatherState();
+    const badge = this.weatherMode === 'off' ? '无天气' : state.kind ? WEATHER_LABELS[state.kind] : '晴朗';
+    if (c.weather !== badge) {
+      c.weather = badge;
+      this.el('weather-badge').textContent = badge;
     }
 
     const wave = this.level.waves[this.waveIndex];

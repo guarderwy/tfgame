@@ -280,6 +280,14 @@ html[data-screen="wide"] #app { max-width: none; padding-inline: 20px; }
 .menu-item:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 .menu-item.active { color: #221a0c; background: linear-gradient(180deg, #f0c878, #d8a447); }
 .menu-sep { height: 1px; margin: 5px 4px; background: var(--line); }
+.menu-label { display: block; padding: 5px 10px 3px; font-size: 11px; color: var(--muted); letter-spacing: .08em; }
+.menu-select {
+  display: block; width: 100%; margin-bottom: 5px; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: rgba(10, 16, 14, .92); color: var(--text); font: inherit; font-size: 12px;
+  cursor: pointer;
+}
+.menu-select:focus { outline: 1px solid var(--accent); }
 
 /* ============ 布局 ============ */
 .layout {
@@ -361,6 +369,10 @@ html[data-screen="wide"] canvas { aspect-ratio: 16 / 9; }
 .hud-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
 .stage-hud[data-state="wave"] .hud-dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .stage-hud[data-state="lost"] .hud-dot { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+.weather-badge {
+  margin-left: 4px; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 999px;
+  background: rgba(8, 14, 12, .72); color: var(--text-dim); font-size: 10px; letter-spacing: .08em;
+}
 
 .banner {
   position: absolute;

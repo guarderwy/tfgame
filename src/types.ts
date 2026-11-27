@@ -57,7 +57,9 @@ export interface Wave {
 }
 
 export type DecoKind = 'trees' | 'rocks' | 'forest' | 'reeds' | 'crates' | 'rails' | 'ruins' | 'desert' | 'snow' | 'city' | 'space';
-export type WeatherKind = 'snow' | 'rain' | 'sandstorm' | 'thunderstorm' | 'fireflies' | 'fog';
+export type WeatherKind =
+  | 'snow' | 'rain' | 'sandstorm' | 'thunderstorm' | 'fireflies' | 'fog'
+  | 'hail' | 'aurora' | 'ash' | 'acidrain' | 'meteor';
 
 export interface LevelTheme {
   ground: string;
