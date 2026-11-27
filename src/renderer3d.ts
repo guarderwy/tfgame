@@ -207,7 +207,9 @@ function shadow(mesh: THREE.Mesh) {
 }
 
 function cfgAccent(color: string) {
-  return color;
+  const c = new THREE.Color(color);
+  c.offsetHSL(0, 0.12, 0.14);
+  return `#${c.getHexString()}`;
 }
 
 function glowMat(color: number | string, intensity = 0.9) {
@@ -1314,12 +1316,14 @@ export class Renderer3D {
   }
 
   private decorateEnemy(g: THREE.Group, e: Enemy) {
-    const accent = glowMat(e.color, 0.45);
-    const steel = metalMat('#5b6153', 0.72, 0.34);
-    const dark = metalMat('#262a24', 0.5, 0.5);
-    const lamp = glowMat('#ffe6a8', 1.2);
-    const red = glowMat('#ff6b5d', 1.3);
-    const green = glowMat('#7df0a0', 1.3);
+    const accent = glowMat(cfgAccent(e.color), 0.75);
+    const steel = metalMat('#7c8678', 0.62, 0.42);
+    const dark = metalMat('#394037', 0.45, 0.58);
+    const trim = metalMat('#d8e0d4', 0.35, 0.55);
+    const lamp = glowMat('#fff0c0', 1.15);
+    const red = glowMat('#ff7365', 1.3);
+    const green = glowMat('#89f5ad', 1.3);
+    const pulse: THREE.Mesh[] = [];
     const add = (geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
       const m = shadow(new THREE.Mesh(geo, material));
       m.position.set(x, y, z);
@@ -1341,13 +1345,19 @@ export class Renderer3D {
     switch (e.type) {
       case 'infantry':
         box(0.2, 0.07, 0.04, dark, 0, 0.82, 0.13);
+        pulse.push(box(0.16, 0.035, 0.03, accent, 0, 0.83, 0.15));
+        [-0.2, 0.2].forEach((x) => box(0.1, 0.1, 0.16, steel, x, 0.7, 0));
         box(0.05, 0.3, 0.04, steel, -0.14, 0.52, -0.15, 0, 0, -0.15);
         box(0.05, 0.3, 0.04, steel, 0.14, 0.52, -0.15, 0, 0, 0.15);
         sph(0.035, red, 0.14, 0.62, 0.1);
+        cyl(0.012, 0.012, 0.22, 5, trim, -0.16, 0.78, -0.18);
         box(0.04, 0.04, 0.18, dark, 0.16, 0.56, 0.34);
         break;
       case 'truck':
         box(0.5, 0.06, 0.07, steel, 0, 0.85, 0.44);
+        pulse.push(box(0.3, 0.045, 0.06, accent, 0, 0.89, 0.44));
+        [-0.3, 0.3].forEach((x) => box(0.02, 0.06, 0.6, trim, x, 0.47, 0));
+        [-0.28, 0.28].forEach((x) => box(0.02, 0.08, 0.4, steel, x, 0.7, -0.3));
         sph(0.05, lamp, -0.24, 0.55, 0.55);
         sph(0.05, lamp, 0.24, 0.55, 0.55);
         box(0.34, 0.2, 0.28, steel, 0, 0.74, -0.3);
@@ -1359,6 +1369,8 @@ export class Renderer3D {
         box(0.94, 0.14, 0.1, steel, 0, 0.32, 0.62);
         box(0.09, 0.12, 0.78, steel, -0.46, 0.32, 0);
         box(0.09, 0.12, 0.78, steel, 0.46, 0.32, 0);
+        [-0.52, 0.52].forEach((x) => box(0.03, 0.16, 0.9, trim, x, 0.42, 0));
+        pulse.push(cyl(0.075, 0.075, 0.05, 8, accent, 0, 0.74, 0.62, Math.PI / 2));
         sph(0.05, lamp, -0.28, 0.55, 0.6);
         sph(0.05, lamp, 0.28, 0.55, 0.6);
         cyl(0.02, 0.02, 0.42, 6, dark, -0.3, 1.02, -0.16);
@@ -1370,14 +1382,18 @@ export class Renderer3D {
         sph(0.05, green, 0.88, 0.06, 0);
         [-0.4, 0.4].forEach((x) => {
           cyl(0.08, 0.08, 0.1, 10, accent, x, 0, 0.34, Math.PI / 2);
+          pulse.push(box(0.44, 0.02, 0.07, accent, x, 0.08, 0.02));
           box(0.06, 0.04, 0.3, steel, x, 0.02, -0.16);
         });
         if (e.type === 'bomber') {
           [-0.18, 0.18].forEach((x) => box(0.08, 0.12, 0.32, dark, x, -0.14, -0.02));
+          [-0.2, 0.2].forEach((x) => box(0.04, 0.2, 0.22, steel, x, 0.16, -0.62));
         }
         break;
       case 'helicopter':
         sph(0.06, lamp, 0, -0.12, 0.42);
+        cyl(0.07, 0.07, 0.06, 8, trim, 0, 0.33, 0);
+        pulse.push(box(0.04, 0.04, 0.4, accent, 0, 0.06, -0.45));
         [-0.42, 0.42].forEach((x) => cyl(0.06, 0.06, 0.3, 8, dark, x, -0.1, 0.02, 0, 0, Math.PI / 2));
         add(new THREE.TorusGeometry(0.14, 0.02, 5, 12), steel, 0.06, 0.1, -0.76, Math.PI / 2);
         break;
@@ -1385,6 +1401,8 @@ export class Renderer3D {
       case 'destroyer': {
         const len = e.type === 'destroyer' ? 1.9 : 1.6;
         [-0.36, 0.36].forEach((x) => box(0.02, 0.08, len * 0.8, steel, x, 0.38, 0));
+        pulse.push(box(0.08, 0.012, len * 0.7, accent, 0, 0.34, 0));
+        box(0.32, 0.05, 0.02, trim, 0, 0.66, 0.02);
         sph(0.07, lamp, 0, 0.78, -0.12);
         box(0.22, 0.1, 0.12, accent, -0.24, 0.42, -0.6);
         add(new THREE.CapsuleGeometry(0.08, 0.18, 4, 8), steel, 0.26, 0.46, -0.62, Math.PI / 2);
@@ -1393,25 +1411,32 @@ export class Renderer3D {
       }
       case 'submarine':
         cyl(0.025, 0.025, 0.12, 6, red, 0, 0.58, -0.05);
+        pulse.push(box(0.12, 0.02, 0.2, accent, 0, 0.37, -0.05));
+        sph(0.04, lamp, 0, 0.02, 0.72);
         [-0.5, 0.5].forEach((z) => box(0.5, 0.03, 0.06, accent, 0, 0.02, z));
         break;
       case 'hovercraft':
         add(new THREE.TorusGeometry(0.52, 0.035, 6, 18), accent, 0, 0.07, 0, Math.PI / 2);
+        pulse.push(add(new THREE.TorusGeometry(0.46, 0.012, 5, 18), accent, 0, 0.12, 0, Math.PI / 2));
+        box(0.3, 0.03, 0.05, trim, 0, 0.24, 0.58);
         [-0.3, 0.3].forEach((x) => add(new THREE.TorusGeometry(0.14, 0.02, 5, 14), lamp, x, 0.4, -0.57));
         break;
       case 'mech':
       case 'strider':
-        sph(0.11, accent, 0, 0.82, 0.22);
+        pulse.push(sph(0.11, accent, 0, 0.82, 0.22));
         [-0.42, 0.42].forEach((x) => {
           cyl(0.03, 0.03, 0.22, 6, accent, x, 1.0, -0.1);
+          box(0.18, 0.1, 0.26, trim, x, 0.92, 0.02);
+          cyl(0.025, 0.025, 0.3, 6, steel, x, 0.62, 0.12);
           box(0.1, 0.22, 0.12, steel, x, 0.45, -0.04);
         });
         box(0.34, 0.08, 0.06, steel, 0, 0.98, 0.2);
         break;
       case 'drone':
         [[-0.32, -0.32], [0.32, -0.32], [-0.32, 0.32], [0.32, 0.32]].forEach(([x, z]) =>
-          add(new THREE.TorusGeometry(0.17, 0.018, 5, 14), accent, x, 0.05, z, Math.PI / 2));
-        sph(0.05, glowMat('#66d0ff', 1.4), 0, -0.02, 0.18);
+          pulse.push(add(new THREE.TorusGeometry(0.17, 0.018, 5, 14), accent, x, 0.05, z, Math.PI / 2)));
+        add(new THREE.TorusGeometry(0.09, 0.012, 5, 12), trim, 0, -0.02, 0.18);
+        pulse.push(sph(0.05, glowMat('#66d0ff', 1.4), 0, -0.02, 0.18));
         break;
     }
     // 首领光环：所有敌人模型统一携带（非首领隐藏），引用存入 userData，
@@ -1425,15 +1450,27 @@ export class Renderer3D {
       aura.position.y = 0.08;
       aura.visible = !!e.boss;
       g.add(aura);
-      Object.assign(g.userData, { aura });
+      pulse.forEach((part) => {
+        const material = part.material as THREE.MeshStandardMaterial;
+        if (material.emissiveIntensity !== undefined) part.userData.baseEmissive = material.emissiveIntensity;
+      });
+      Object.assign(g.userData, { aura, pulse });
     }
   }
 
   private createEnemy(e: Enemy): THREE.Group {
     const g = new THREE.Group();
-    const bodyMat = mat(e.color);
-    const darkMat = mat('#2c3028');
-    const glassMat = mat('#9fc0c8', { metalness: 0.4, roughness: 0.3 });
+    const bodyMat = mat(e.color, {
+      metalness: e.kind === 'air' ? 0.45 : 0.32,
+      roughness: e.kind === 'water' ? 0.5 : 0.62,
+      emissive: new THREE.Color(e.color),
+      emissiveIntensity: 0.12,
+    });
+    const darkMat = mat('#394037', { metalness: 0.45, roughness: 0.58 });
+    const glassMat = mat('#bcd8e0', {
+      metalness: 0.25, roughness: 0.2,
+      emissive: new THREE.Color('#6fa0b0'), emissiveIntensity: 0.08,
+    });
     if (e.type === 'infantry') {
       const legGeo = new THREE.BoxGeometry(0.1, 0.32, 0.1);
       const legs: THREE.Mesh[] = [];
@@ -1941,6 +1978,12 @@ export class Renderer3D {
           leg.rotation.x = Math.sin(this.clock * 8 + i * Math.PI) * 0.32;
         });
       }
+      (mesh.userData.pulse as THREE.Mesh[] | undefined)?.forEach((part, i) => {
+        const material = part.material as THREE.MeshStandardMaterial;
+        if (material.emissiveIntensity === undefined) return;
+        const base = (part.userData.baseEmissive as number | undefined) ?? 1;
+        material.emissiveIntensity = base * (0.82 + 0.28 * Math.sin(this.clock * 3 + e.id * 0.4 + i));
+      });
       const aura = mesh.userData.aura as THREE.Mesh | undefined;
       if (aura) {
         aura.visible = e.boss;
