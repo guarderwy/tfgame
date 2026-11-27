@@ -307,6 +307,7 @@ export class WeatherSystem {
   private baseHemiColor = new THREE.Color('#cfe0b8');
   private baseSunColor = new THREE.Color('#ffe9c4');
   private baseExposure: number;
+  private highContrast = false;
   private tmpColor = new THREE.Color();
   private tmpColor2 = new THREE.Color();
 
@@ -702,6 +703,11 @@ export class WeatherSystem {
   /** 注入雷声回调（闪电触发时调用，与画面闪光同步） */
   setThunderCallback(cb: () => void) {
     this.onThunder = cb;
+  }
+
+  /** 高对比：压低环境光、抬高主光与曝光，由每帧氛围更新统一施加 */
+  setHighContrast(on: boolean) {
+    this.highContrast = on;
   }
 
   /** 关卡加载时调用：记录基准氛围；天气改为随机事件，进入关卡先保持原貌 */
@@ -1186,8 +1192,11 @@ export class WeatherSystem {
 
     fog.near = near;
     fog.far = far;
-    this.hemi.intensity = this.baseHemi * hemiMul;
-    this.sun.intensity = this.baseSun * sunMul;
+    // 高对比：压低环境填充光、抬高主光方向感，并在曝光上再拉开层次
+    const hemiContrast = this.highContrast ? 0.72 : 1;
+    const sunContrast = this.highContrast ? 1.4 : 1;
+    this.hemi.intensity = this.baseHemi * hemiMul * hemiContrast;
+    this.sun.intensity = this.baseSun * sunMul * sunContrast;
 
     // 沙色浸染：风沙期场景环境光/阳光被暖沙色污染，炮台地面整体向暖褐偏移，
     // 阵风峰值最强、沙退后随权重归零还原主题固有色
@@ -1199,9 +1208,9 @@ export class WeatherSystem {
     const flash = this.flashIntensity();
     if (flash > 0) {
       fog.color.lerp(this.tmpColor.set(FLASH_FOG), flash * 0.85);
-      this.hemi.intensity += this.baseHemi * flash * 2.4;
-      this.sun.intensity += this.baseSun * flash * 1.2;
+      this.hemi.intensity += this.baseHemi * flash * 2.4 * hemiContrast;
+      this.sun.intensity += this.baseSun * flash * 1.2 * sunContrast;
     }
-    this.renderer.toneMappingExposure = this.baseExposure * (1 + flash * 0.9);
+    this.renderer.toneMappingExposure = this.baseExposure * (1 + flash * 0.9) * (this.highContrast ? 1.08 : 1);
   }
 }

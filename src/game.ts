@@ -237,6 +237,7 @@ export class Game {
   }
 
   private syncContrastButton() {
+    document.documentElement.dataset.contrast = this.highContrast ? 'high' : 'normal';
     const btn = $('btn-contrast') as HTMLButtonElement;
     btn.textContent = this.highContrast ? '高对比 开' : '高对比 关';
     btn.classList.toggle('active', this.highContrast);
@@ -246,6 +247,7 @@ export class Game {
   private togglePause() {
     if (this.status === 'won' || this.status === 'lost') return;
     this.paused = !this.paused;
+    this.audio.setPaused(this.paused);
     $('btn-pause').textContent = this.paused ? '继续' : '暂停';
     $('btn-pause').classList.toggle('active', this.paused);
   }
@@ -312,8 +314,19 @@ export class Game {
 
   private fillLevelSelect() {
     const sel = $('level-select') as HTMLSelectElement;
-    sel.innerHTML = LEVELS.map((l) => `<option value="${l.id}">第 ${l.id} 关 · ${l.name}</option>`).join('');
     sel.addEventListener('change', () => this.loadLevel(Number(sel.value)));
+    this.refreshLevelOptions();
+  }
+
+  private refreshLevelOptions() {
+    const sel = $('level-select') as HTMLSelectElement;
+    const current = Number(sel.value) || this.unlocked;
+    sel.innerHTML = LEVELS.map((l) => {
+      const stars = this.stars[l.id] ?? 0;
+      const suffix = stars > 0 ? ` ${'★'.repeat(stars)}` : '';
+      return `<option value="${l.id}">第 ${l.id} 关 · ${l.name}${suffix}</option>`;
+    }).join('');
+    sel.value = String(Math.max(1, current));
   }
 
   private buildTowerList() {
@@ -661,6 +674,7 @@ export class Game {
     ($('level-select') as HTMLSelectElement).value = String(lv.id);
     $('result').classList.add('hidden');
     this.view.buildLevel(this.groundPaths, this.waterPaths, this.pathTiles, lv.theme);
+    this.audio.setPaused(false);
     this.audio.playMusicForLevel(lv.id);
     this.showBanner(`第 ${lv.id} 关 · ${lv.name}`, lv.desc);
     this.syncAll();
@@ -681,9 +695,12 @@ export class Game {
     const cfg = TOWER_CONFIG[type];
     if (!isTowerUnlocked(type, this.level.id)) { this.flash(`第 ${TOWER_UNLOCK[type]} 关解锁`); return; }
     if (!this.canBuild(tx, ty)) { this.flash('此处无法建造'); return; }
-    if (cfg.minelayer && this.waterPaths.length === 0) { this.flash('本关没有水路，无法布设水雷'); return; }
-    if (this.gold < cfg.cost) { this.flash('金币不足'); return; }
     const pos = tileToPixel(tx, ty);
+    if (cfg.minelayer && !this.nearestWaterPoint(pos.x, pos.y, cfg.range)) {
+      this.flash('射程内没有水路，水雷布设器无法工作');
+      return;
+    }
+    if (this.gold < cfg.cost) { this.flash('金币不足'); return; }
     const tower: Tower = {
       id: ++this.id, type, targetMode: this.targetDefaults[type] ?? 'first',
       level: 1, tx, ty, x: pos.x, y: pos.y,
@@ -1383,6 +1400,7 @@ export class Game {
       const stars = starsFor(this.lives, this.level.lives);
       this.stars[this.level.id] = Math.max(this.stars[this.level.id] ?? 0, stars);
       this.saveProgress();
+      this.refreshLevelOptions();
       this.uiCache.towerKey = '';
       this.syncTowerList();
       starsEl.hidden = false;

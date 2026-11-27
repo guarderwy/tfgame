@@ -37,6 +37,7 @@ export class AudioKit {
   private musicBus: GainNode | null = null;
   private sfxBus: GainNode | null = null;
   private musicTimer: number | null = null;
+  private musicPaused = false;
   private musicStep = 0;
   private nextNoteTime = 0;
   private currentTrack = -1;
@@ -93,7 +94,7 @@ export class AudioKit {
     filter.type = 'lowpass';
     filter.frequency.value = 240;
     const gain = ctx.createGain();
-    gain.gain.value = 0.055;
+    gain.gain.value = this.musicPaused ? 0 : 0.055;
     src.connect(filter).connect(gain).connect(this.sfxBus);
     src.start();
     this.ambience = { src, gain };
@@ -126,7 +127,7 @@ export class AudioKit {
 
   private scheduleMusic() {
     const ctx = this.ctx;
-    if (!ctx || this.currentTrack < 0 || this.musicMuted) return;
+    if (!ctx || this.currentTrack < 0 || this.musicMuted || this.musicPaused) return;
     if (this.nextNoteTime < ctx.currentTime - 0.1) this.nextNoteTime = ctx.currentTime + 0.03;
     const track = TRACKS[this.currentTrack];
     const stepDur = 60 / track.bpm / 2;
@@ -141,6 +142,28 @@ export class AudioKit {
     }
   }
 
+  /** 暂停时停掉调度器并淡出音乐总线与底噪，避免“画面停了音乐还在跑” */
+  setPaused(paused: boolean) {
+    if (this.musicPaused === paused) return;
+    this.musicPaused = paused;
+    if (paused) {
+      if (this.musicTimer !== null) window.clearInterval(this.musicTimer);
+      this.musicTimer = null;
+      if (this.ctx && this.musicBus) this.musicBus.gain.setTargetAtTime(0, this.ctx.currentTime, 0.04);
+      if (this.ctx && this.ambience) this.ambience.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.04);
+      return;
+    }
+    const ctx = this.ensure();
+    if (!ctx || !this.musicBus) return;
+    this.musicBus.gain.setTargetAtTime(this.musicMuted ? 0 : 0.9, ctx.currentTime, 0.04);
+    if (this.ambience) this.ambience.gain.gain.setTargetAtTime(0.055, ctx.currentTime, 0.04);
+    if (this.currentTrack >= 0 && !this.musicMuted) {
+      this.nextNoteTime = ctx.currentTime + 0.05;
+      this.musicTimer = window.setInterval(() => this.scheduleMusic(), 25);
+      this.scheduleMusic();
+    }
+  }
+
   playMusic(index: number) {
     const ctx = this.ensure();
     if (!ctx) return;
@@ -148,8 +171,11 @@ export class AudioKit {
     this.musicStep = 0;
     this.nextNoteTime = ctx.currentTime + 0.05;
     if (this.musicTimer !== null) window.clearInterval(this.musicTimer);
-    this.musicTimer = window.setInterval(() => this.scheduleMusic(), 25);
-    this.scheduleMusic();
+    this.musicTimer = null;
+    if (!this.musicPaused && !this.musicMuted) {
+      this.musicTimer = window.setInterval(() => this.scheduleMusic(), 25);
+      this.scheduleMusic();
+    }
     this.startAmbience();
   }
 
@@ -158,8 +184,9 @@ export class AudioKit {
     this.musicTimer = null;
   }
 
+  // 曲目随关卡阶段切换：前期进行曲、中期电子脉冲、后期太空回响
   playMusicForLevel(levelId: number) {
-    this.playMusic(Math.floor(Math.random() * TRACKS.length));
+    this.playMusic(levelId <= 7 ? 0 : levelId <= 16 ? 1 : 2);
   }
 
   dispose() {
@@ -185,7 +212,7 @@ export class AudioKit {
 
   setMusicMuted(muted: boolean) {
     this.musicMuted = muted;
-    if (this.musicBus && this.ctx) this.musicBus.gain.setTargetAtTime(muted ? 0 : 0.9, this.ctx.currentTime, 0.03);
+    if (this.musicBus && this.ctx) this.musicBus.gain.setTargetAtTime(muted || this.musicPaused ? 0 : 0.9, this.ctx.currentTime, 0.03);
     if (!muted && this.currentTrack >= 0) {
       this.musicStep = 0;
       this.nextNoteTime = this.ctx ? this.ctx.currentTime + 0.05 : 0;

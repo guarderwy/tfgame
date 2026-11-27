@@ -28,6 +28,27 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* 高对比模式：同时提高 DOM 文字/边框对比度（3D 光照由天气系统负责） */
+html[data-contrast="high"] {
+  --bg: #050807;
+  --panel: rgba(8, 14, 11, 0.96);
+  --panel-solid: #0a100d;
+  --panel-2: #101a14;
+  --panel-3: #17251c;
+  --line: rgba(210, 240, 215, 0.32);
+  --line-2: rgba(210, 240, 215, 0.5);
+  --text: #ffffff;
+  --text-dim: #e4f0e6;
+  --muted: #c2d6c6;
+  --accent: #ffd27a;
+  --accent-2: #ffe6a8;
+  --accent-soft: rgba(255, 210, 122, 0.18);
+  --accent-line: rgba(255, 210, 122, 0.65);
+  --teal: #7ff0dc;
+  --green: #b4ed8f;
+  --danger: #ff9b91;
+}
+
 * { box-sizing: border-box; }
 
 body {

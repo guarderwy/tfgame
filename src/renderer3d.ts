@@ -536,10 +536,8 @@ export class Renderer3D {
   }
 
   private applyContrast() {
-    const factor = this.highContrast ? 0.9 : 1;
-    this.hemi.intensity = (this.currentTheme?.ambient ?? 1.05) * factor;
-    this.sun.intensity = (this.currentTheme?.sun ?? 1.15) * factor;
-    this.renderer.toneMappingExposure = this.highContrast ? 1.05 : 0.95;
+    // 灯光与曝光由天气系统每帧统一施加，避免被 atmosphere 覆盖；此处仅同步状态
+    this.weather.setHighContrast(this.highContrast);
   }
 
   destroy() {
